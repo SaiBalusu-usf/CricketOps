@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ICAT Cricket Live</title>
+  <meta name="theme-color" content="#0d1117">
+  <link rel="icon" href="/client/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/client/icons/icon.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/client/shared/base.css">
+  <style>
+    body.dark { background: #0a0e14; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px 56px; }
+
+    .hero { text-align: center; padding: 44px 0 26px; }
+    .hero img.logo { height: 64px; width: auto; margin-bottom: 10px; }
+    .hero h1 { font-size: clamp(38px, 9vw, 56px); letter-spacing: 0.01em; margin: 0; color: var(--accent); }
+    .hero .sub { color: var(--fg-soft); font-weight: 600; margin-top: 4px; }
+    .hero .tag {
+      display: inline-block; margin-top: 10px; font-size: 12px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.14em; color: var(--fg-soft);
+    }
+
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 22px; }
+    .actions .btn { min-height: 56px; text-decoration: none; font-size: 15px; }
+    .actions .btn.wide { grid-column: 1 / -1; }
+    .actions .btn[hidden] { display: none; }
+
+    h2.sec {
+      font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--fg-soft); margin: 26px 0 10px;
+    }
+    .hint { font-size: 13px; color: var(--fg-soft); margin: 8px 0 0; }
+
+    .urls { padding: 4px 0; }
+    .url-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .url-row:last-child { border-bottom: 0; }
+    .url-row .nm { flex: none; width: 86px; font-weight: 800; font-size: 13px; text-transform: capitalize; }
+    .url-row .u {
+      flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+      color: var(--fg-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .url-row .btn { min-height: 34px; min-width: 34px; padding: 0 12px; font-size: 13px; flex: none; }
+
+    .phones { display: flex; flex-wrap: wrap; gap: 14px; padding: 14px; }
+    .phone { text-align: center; flex: 1; min-width: 150px; }
+    .phone img { width: 140px; height: 140px; background: #fff; border-radius: 10px; padding: 6px; }
+    .phone .u { display: block; margin-top: 8px; font-size: 12.5px; color: var(--fg-soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; }
+
+    footer { text-align: center; color: var(--fg-soft); font-size: 13px; margin-top: 34px; }
+
+    #toasts { position: fixed; left: 0; right: 0; bottom: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 60; pointer-events: none; }
+    .toast { background: var(--fg); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 14px; font-weight: 700;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.4); opacity: 0; transform: translateY(8px);
+      transition: opacity 0.24s cubic-bezier(0.2,0.9,0.3,1), transform 0.24s cubic-bezier(0.2,0.9,0.3,1); }
+    .toast.show { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body class="dark">
+  <main class="wrap">
+    <div class="hero">
+      <img id="logo" class="logo" alt="" hidden>
+      <h1 id="orgName">ICAT</h1>
+      <div id="footerLine" class="sub"></div>
+      <span class="tag">Cricket scoring · live overlays · streaming</span>
+    </div>
+
+    <div class="actions">
+      <a id="resumeBtn" class="btn primary wide" href="/console" hidden>Resume scoring</a>
+      <a class="btn accent" href="/console?new=1">New match</a>
+      <a id="watchBtn" class="btn" href="/matches">Watch live</a>
+      <a class="btn" href="/matches">All matches</a>
+      <a class="btn" href="/director">Director panel</a>
+      <a class="btn wide ghost" href="/settings">Branding settings</a>
+    </div>
+
+    <h2 class="sec">OBS browser sources</h2>
+    <div id="overlayUrls" class="urls card"></div>
+    <p class="hint">Add each as a Browser Source in OBS at 1920×1080, transparent background — it composites over your camera.</p>
+
+    <h2 class="sec">Score from a phone</h2>
+    <div id="phones" class="phones card"></div>
+    <p class="hint">Phone and this computer must share a network — a phone hotspot works fine at the ground.</p>
+
+    <footer id="pageFooter"></footer>
+  </main>
+  <div id="toasts" aria-live="polite"></div>
+
+  <script type="module">
+    import { $, h } from '/client/shared/app.js';
+
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+    function toast(msg) {
+      const el = h('div', { class: 'toast' }, msg);
+      $('#toasts').append(el);
+      requestAnimationFrame(() => el.classList.add('show'));
+      setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 2200);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+      const ta = h('textarea', { style: { position: 'fixed', opacity: '0' } }, text);
+      document.body.append(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* best effort */ }
+      ta.remove();
+      return Promise.resolve();
+    }
+
+    async function boot() {
+      let info = {};
+      let branding = {};
+      try { info = await (await fetch('/api/info')).json(); } catch { /* offline */ }
+      try { branding = await (await fetch('/api/branding')).json(); } catch { /* defaults */ }
+
+      // hero branding
+      if (branding.accent) document.documentElement.style.setProperty('--accent', branding.accent);
+      if (branding.orgName) $('#orgName').textContent = branding.orgName;
+      if (branding.footer) $('#footerLine').textContent = branding.footer;
+      if (branding.logo) { $('#logo').src = branding.logo; $('#logo').hidden = false; }
+      $('#pageFooter').textContent = branding.footer || '';
+
+      // active-match buttons
+      if (info.activeMatchId) {
+        const r = $('#resumeBtn');
+        r.href = `/console/${info.activeMatchId}`;
+        r.hidden = false;
+        $('#watchBtn').href = `/live/${info.activeMatchId}`;
+      }
+
+      // OBS overlay URLs — absolute, LAN-reachable
+      const base = (info.urls && info.urls[0]) || location.origin;
+      const box = $('#overlayUrls');
+      for (const kind of ['scorebug', 'full', 'batting', 'bowling', 'summary', 'lineups', 'target']) {
+        const url = `${base}/overlay/${kind}`;
+        box.append(h('div', { class: 'url-row' },
+          h('span', { class: 'nm' }, kind),
+          h('span', { class: 'u' }, url),
+          h('button', { class: 'btn', onclick: async () => { await copyText(url); toast(`${kind} URL copied`); } }, 'Copy')));
+      }
+
+      // phone QR codes → console
+      const phones = $('#phones');
+      const urls = (info.urls && info.urls.length) ? info.urls : [location.origin];
+      for (const u of urls) {
+        const target = `${u}/console`;
+        phones.append(h('div', { class: 'phone' },
+          h('img', { src: `/qr.svg?text=${encodeURIComponent(target)}`, alt: `QR code for ${target}` }),
+          h('span', { class: 'u' }, target)));
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Matches — ICAT Cricket Live</title>
+  <meta name="theme-color" content="#0d1117">
+  <link rel="icon" href="/client/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/client/icons/icon.svg">
+  <link rel="stylesheet" href="/client/shared/base.css">
+  <link rel="stylesheet" href="/client/live/live.css">
+</head>
+<body class="dark">
+  <main class="wrap">
+    <div class="page-head">
+      <h1>Matches</h1>
+      <a class="btn" href="/">Home</a>
+      <button id="importBtn" class="btn primary" type="button">Import</button>
+      <input id="importFile" type="file" accept=".json,application/json" hidden>
+    </div>
+    <div id="list"></div>
+  </main>
+  <div id="toasts" aria-live="polite"></div>
+  <script type="module" src="/client/live/matches.js"></script>
+</body>
+</html>

@@ -1,0 +1,188 @@
+/* Stinger banners — centre-lower animated fx, mounted by stingers.js.
+   Used by /overlay/full (and any page that imports mountStingers). */
+
+.fx-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.stinger {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 330px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  --red: #e01e37;
+  --gold: #ffd75e;
+}
+
+/* full-width accent sweep lines behind the banner */
+.s-sweep {
+  position: absolute;
+  left: -46%;
+  top: 50%;
+  width: 46%;
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+}
+.s-sweep-b { top: calc(50% + 16px); }
+.stinger.in .s-sweep-a { animation: st-sweep 0.85s 0.02s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.stinger.in .s-sweep-b { animation: st-sweep 0.85s 0.16s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.t-wicket .s-sweep, .t-duck .s-sweep, .t-hattrick .s-sweep {
+  background: linear-gradient(90deg, transparent, var(--red), transparent);
+}
+.t-result .s-sweep { background: linear-gradient(90deg, transparent, var(--gold), transparent); }
+
+@keyframes st-sweep {
+  0% { transform: translateX(0); opacity: 0; }
+  12% { opacity: 0.9; }
+  100% { transform: translateX(420%); opacity: 0; }
+}
+
+/* the banner itself: angled slabs, counter-skewed text */
+.s-inner {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  max-width: 1560px;
+  transform: skewX(-10deg);
+  opacity: 0;
+  filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.5));
+}
+.stinger.in .s-inner { animation: st-in 0.44s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.stinger.out .s-inner { animation: st-out 0.34s ease-in both; }
+
+@keyframes st-in {
+  0% { transform: skewX(-10deg) translateY(64px) scale(0.94); opacity: 0; }
+  60% { opacity: 1; }
+  100% { transform: skewX(-10deg) translateY(0) scale(1); opacity: 1; }
+}
+@keyframes st-out {
+  0% { transform: skewX(-10deg) translateY(0); opacity: 1; }
+  100% { transform: skewX(-10deg) translateY(-34px); opacity: 0; }
+}
+
+/* counter-skew wrapper so type + numbers stay upright */
+.s-k { display: block; transform: skewX(10deg); }
+
+.s-word {
+  display: flex;
+  align-items: center;
+  padding: 10px 52px;
+  background: var(--accent);
+  color: #171204;
+  font-size: 84px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-radius: 10px 0 0 10px;
+}
+.s-word:last-child { border-radius: 10px; }
+
+.s-info {
+  display: flex;
+  align-items: center;
+  padding: 12px 40px;
+  background: linear-gradient(180deg, var(--panel-hi), var(--panel-lo));
+  border: 1px solid var(--panel-line);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  min-width: 0;
+}
+.s-main {
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 900px;
+}
+.s-sub {
+  margin-top: 4px;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 900px;
+}
+
+/* trailing team-score slab (wicket / over) */
+.s-score {
+  display: flex;
+  align-items: center;
+  padding: 12px 34px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1)),
+    linear-gradient(180deg, var(--panel-hi), var(--panel-lo));
+  border: 1px solid var(--panel-line);
+  border-left: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 0 10px 10px 0;
+  font-size: 48px;
+  font-weight: 900;
+}
+.s-info + .s-score { margin-left: -1px; }
+.s-score + .s-info { border-radius: 0 10px 10px 0; }
+.s-inner .s-info:not(:last-child) { border-radius: 0; }
+
+/* red treatment for bowling-side drama */
+.t-wicket .s-word, .t-duck .s-word, .t-hattrick .s-word {
+  background: linear-gradient(180deg, #f13a52, var(--red));
+  color: #fff;
+}
+
+/* over summary: compact strip */
+.t-over .s-word { font-size: 30px; padding: 8px 30px; letter-spacing: 0.08em; }
+.t-over .s-info { padding: 10px 28px; }
+.t-over .s-main { font-size: 30px; }
+.t-over .s-sub { font-size: 19px; }
+.t-over .s-score { font-size: 32px; padding: 10px 26px; }
+.s-toks { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.s-tok {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 19px;
+  font-weight: 800;
+}
+.s-tok.w { background: var(--red); color: #fff; }
+.s-tok.bd { background: var(--accent); color: #171204; }
+.s-tok.ex { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.28); color: var(--ink-dim); font-size: 16px; }
+
+/* grand gold result */
+.t-result .s-word {
+  background: linear-gradient(180deg, #ffe28a, #f0ab0a);
+  color: #171204;
+  font-size: 58px;
+  padding: 22px 70px;
+  border-radius: 10px;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+.t-result .s-word .s-k { text-align: center; }
+.t-result .s-tag {
+  display: block;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: rgba(23, 18, 4, 0.66);
+  margin-bottom: 6px;
+}

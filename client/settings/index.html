@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Settings — ICAT Cricket Live</title>
+  <meta name="theme-color" content="#f4f6f8">
+  <link rel="icon" href="/client/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/client/icons/icon.svg">
+  <link rel="stylesheet" href="/client/shared/base.css">
+  <style>
+    [hidden] { display: none !important; }
+    .wrap { max-width: 680px; margin: 0 auto; padding: 0 16px 64px; }
+    .page-head { display: flex; align-items: center; gap: 10px; padding: 18px 0 14px; }
+    .page-head h1 { font-size: 22px; margin: 0; flex: 1; }
+    .page-head a.btn { min-height: 40px; padding: 0 14px; font-size: 14px; text-decoration: none; }
+
+    form .card { margin-bottom: 14px; }
+    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+    .field:last-child { margin-bottom: 0; }
+    .field input[type="text"] { width: 100%; }
+    .accent-row { display: flex; align-items: center; gap: 10px; }
+    .accent-row input[type="color"] { width: 64px; height: 44px; padding: 4px; cursor: pointer; }
+    .accent-row .hex { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; color: var(--fg-soft); }
+
+    .logo-row { display: flex; align-items: center; gap: 12px; }
+    .thumb {
+      width: 56px; height: 56px; flex: none; border: 1px dashed var(--line); border-radius: 10px;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+      background: #fff; color: var(--fg-soft); font-size: 11px; font-weight: 700;
+    }
+    .thumb img { max-width: 100%; max-height: 100%; }
+    .logo-row .btn { min-height: 40px; padding: 0 14px; font-size: 14px; }
+
+    h2.sec { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-soft); margin: 4px 0 12px; }
+    .sponsor { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .sponsor:last-child { margin-bottom: 0; }
+    .sponsor input[type="text"] { flex: 1; min-width: 0; }
+
+    /* live preview — a miniature broadcast scorebug strip */
+    #preview { position: sticky; bottom: 12px; z-index: 10; }
+    .pv {
+      background: linear-gradient(180deg, rgba(18,24,38,0.96), rgba(8,12,20,0.98));
+      border: 1px solid rgba(255,255,255,0.09); border-radius: 10px;
+      box-shadow: 0 10px 34px rgba(0,0,0,0.35);
+      color: #fff; padding: 10px 14px; font-variant-numeric: tabular-nums;
+    }
+    .pv-main { display: flex; align-items: center; gap: 10px; }
+    .pv-org { display: flex; align-items: center; gap: 7px; font-weight: 800; letter-spacing: 0.04em; color: var(--accent); white-space: nowrap; }
+    .pv-org img { height: 22px; width: auto; }
+    .pv-team { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; white-space: nowrap; }
+    @media (max-width: 480px) {
+      .pv-team { font-size: 12.5px; }
+      .pv-need { display: none; }
+    }
+    .pv-team .chip { width: 5px; height: 18px; border-radius: 3px; }
+    .pv-team small { color: rgba(255,255,255,0.72); font-weight: 600; }
+    .pv-need { margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+    .pv-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,0.09); }
+    .pv-foot .ft { flex: 1; font-size: 11.5px; color: rgba(255,255,255,0.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pv-foot img { height: 16px; width: auto; opacity: 0.9; }
+    .pv-foot .sname { font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.72); }
+
+    .save-row { display: flex; gap: 10px; margin-top: 16px; }
+    .save-row .btn { flex: 1; }
+
+    #toasts { position: fixed; left: 0; right: 0; bottom: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 60; pointer-events: none; }
+    .toast { background: var(--fg); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 14px; font-weight: 700;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.25); opacity: 0; transform: translateY(8px);
+      transition: opacity 0.24s cubic-bezier(0.2,0.9,0.3,1), transform 0.24s cubic-bezier(0.2,0.9,0.3,1); }
+    .toast.show { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="page-head">
+      <h1>Branding</h1>
+      <a class="btn" href="/">Home</a>
+    </div>
+
+    <form id="form" autocomplete="off">
+      <div class="card">
+        <div class="field">
+          <label for="orgName">Organisation name</label>
+          <input id="orgName" type="text" maxlength="40" placeholder="ICAT">
+        </div>
+        <div class="field">
+          <label for="footer">Footer line</label>
+          <input id="footer" type="text" maxlength="80" placeholder="ICAT — Tampa, FL">
+        </div>
+        <div class="field">
+          <label for="accent">Accent colour</label>
+          <div class="accent-row">
+            <input id="accent" type="color" value="#f5b301">
+            <span id="accentHex" class="hex">#f5b301</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Logo <span class="muted small">(downscaled to 128px)</span></label>
+          <div class="logo-row">
+            <span id="logoThumb" class="thumb">none</span>
+            <button id="logoPick" class="btn" type="button">Choose image</button>
+            <button id="logoClear" class="btn ghost" type="button" hidden>Remove</button>
+            <input id="logoFile" type="file" accept="image/*" hidden>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="sec">Sponsors (up to 3)</h2>
+        <div id="sponsors"></div>
+      </div>
+
+      <div id="preview">
+        <div class="pv">
+          <div class="pv-main">
+            <span class="pv-org"><img id="pvLogo" alt="" hidden><span id="pvOrg">ICAT</span></span>
+            <span class="pv-team"><span class="chip" style="background:#1d4ed8"></span>BLU 147/7 <small>(20)</small></span>
+            <span class="pv-team"><span class="chip" style="background:#b45309"></span>GLD 62/3 <small>(7.4)</small></span>
+            <span class="pv-need">Need 86 off 74</span>
+          </div>
+          <div class="pv-foot">
+            <span id="pvFooter" class="ft"></span>
+            <span id="pvSponsors" class="row" style="gap:8px"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="save-row">
+        <button id="resetBtn" class="btn danger" type="button">Reset to default</button>
+        <button id="saveBtn" class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </main>
+  <div id="toasts" aria-live="polite"></div>
+  <script type="module" src="/client/settings/settings.js"></script>
+</body>
+</html>

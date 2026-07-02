@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Scoring Console — ICAT Cricket Live</title>
+  <meta name="theme-color" content="#f4f6f8">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/client/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/client/icons/icon.svg">
+  <link rel="stylesheet" href="/client/shared/base.css">
+  <link rel="stylesheet" href="/client/console/console.css">
+</head>
+<body>
+  <script>
+    // theme before first paint — no flash
+    if (localStorage.getItem('icat-theme') === 'dark') document.body.classList.add('dark');
+  </script>
+  <div id="app">
+    <header id="hdr"></header>
+    <main id="main"></main>
+    <footer id="dock"></footer>
+  </div>
+  <div id="sheets"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <script type="module" src="/client/console/console.js"></script>
+</body>
+</html>

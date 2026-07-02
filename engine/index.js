@@ -817,11 +817,9 @@ function finalize(st, nameOf) {
     }
   }
 
-  // result
+  // result (the feed is fully re-derived on every fold, so appending here is safe)
   st.result = computeResult(st);
-  if (st.result && !st._resultFed) {
-    // feed line for the result is appended fresh on every fold; harmless since
-    // the feed is fully re-derived each time.
+  if (st.result) {
     st.feed.push({ seq: null, inning: null, ov: null, text: st.result.text, kind: 'result' });
   }
 

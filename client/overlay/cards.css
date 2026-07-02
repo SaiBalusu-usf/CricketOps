@@ -1,0 +1,214 @@
+/* Card overlays — batting / bowling / summary / lineups / target.
+   Shared centred-panel frame (team strip, brand head, branded foot) plus
+   per-card layout. Loaded alongside overlay/base.css. */
+
+.cwrap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ocard {
+  display: flex;
+  flex-direction: column;
+  max-height: 952px; /* stage minus safe margins */
+  overflow: hidden;
+}
+
+/* team colour strip along the top; lineups splits it between both sides */
+.ocard-strip { height: 8px; flex: none; background: var(--team, var(--accent)); }
+.ocard-strip.duo { background: linear-gradient(90deg, var(--team) 0, var(--team) 50%, var(--team2) 50%, var(--team2) 100%); }
+
+.ocard-head {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding: 18px 34px;
+  border-bottom: 1px solid var(--panel-line);
+  flex: none;
+}
+.ocard-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 54px;
+  padding: 8px 20px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #171204;
+  flex: none;
+}
+.ocard-brand-name { font-size: 27px; font-weight: 900; letter-spacing: 0.05em; white-space: nowrap; }
+.ocard-brand-logo { display: none; max-height: 46px; max-width: 130px; }
+.ocard-brand.has-logo { background: rgba(255, 255, 255, 0.92); padding: 6px 12px; }
+.ocard-brand.has-logo .ocard-brand-logo { display: block; }
+.ocard-brand.has-logo .ocard-brand-name { display: none; }
+
+.ocard-titles { min-width: 0; }
+.ocard-kicker { font-size: 17px; font-weight: 700; color: var(--ink-dim); letter-spacing: 0.14em; margin-bottom: 5px; white-space: nowrap; }
+.ocard-title { font-size: 40px; font-weight: 900; letter-spacing: 0.04em; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ocard-headright { margin-left: auto; text-align: right; flex: none; }
+.ocard-headright .big { font-size: 46px; font-weight: 900; line-height: 1.02; }
+.ocard-headright .sub { font-size: 18px; font-weight: 700; color: var(--ink-dim); letter-spacing: 0.08em; margin-top: 4px; }
+
+.ocard-body { padding: 10px 34px 22px; }
+
+.ocard-foot {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 60px;
+  padding: 10px 34px;
+  border-top: 1px solid var(--panel-line);
+  flex: none;
+  margin-top: auto;
+}
+.ocard-foot-text { font-size: 18px; font-weight: 600; color: var(--ink-dim); letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ocard-sponsors { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: none; }
+.ocard-sponsor { display: flex; align-items: center; background: rgba(255, 255, 255, 0.92); border-radius: 6px; padding: 4px 9px; }
+.ocard-sponsor img { max-height: 30px; max-width: 78px; display: block; }
+
+/* marker for the striker / bowler on strike */
+.odot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-right: 11px; vertical-align: 2px; }
+
+/* ---- batting ------------------------------------------------------------ */
+
+.batting-card { width: 1560px; }
+.batting-card .otable { table-layout: fixed; }
+.batting-card .otable th, .batting-card .otable td { padding: 8px 12px; }
+.batting-card .otable td { font-size: 28px; }
+td.bt-ord { color: var(--ink-dim); font-size: 20px; }
+td.bt-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.bt-out { font-size: 20px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.bt-runs { font-weight: 800; }
+
+.bat-ytb { padding: 14px 12px 0; font-size: 21px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bat-ytb .lab { font-size: 15px; font-weight: 800; letter-spacing: 0.14em; margin-right: 10px; }
+.bat-extras { padding: 12px 12px 0; font-size: 21px; color: var(--ink-dim); }
+.bat-extras b { color: var(--ink); font-weight: 800; font-size: 24px; }
+.bat-total {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  margin: 14px 12px 0;
+  padding-top: 14px;
+  border-top: 2px solid rgba(255, 255, 255, 0.18);
+}
+.bat-total-label { font-size: 19px; font-weight: 800; color: var(--ink-dim); letter-spacing: 0.16em; }
+.bat-total-score { font-size: 52px; font-weight: 900; line-height: 1; }
+.bat-total-overs { font-size: 25px; font-weight: 600; color: var(--ink-dim); }
+.bat-total-crr { margin-left: auto; font-size: 24px; font-weight: 700; color: var(--ink-dim); letter-spacing: 0.04em; }
+.bat-total-crr b { color: var(--ink); font-weight: 800; }
+
+/* ---- bowling ------------------------------------------------------------ */
+
+.bowling-card { width: 1440px; }
+.bowling-card .otable { table-layout: fixed; }
+.bowling-card .otable th, .bowling-card .otable td { padding: 10px 12px; }
+td.bw-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.bw-w { font-weight: 800; }
+td.bw-dim { color: var(--ink-dim); }
+.bowl-fow { margin: 16px 12px 0; padding-top: 14px; border-top: 1px solid var(--panel-line); font-size: 20px; line-height: 1.6; color: var(--ink-dim); }
+.bowl-fow .lab { font-size: 15px; font-weight: 800; letter-spacing: 0.14em; color: var(--accent); margin-right: 12px; }
+
+/* ---- summary ------------------------------------------------------------ */
+
+.summary-card { width: 1560px; }
+.sum-result {
+  margin: 12px 0 6px;
+  padding: 13px 20px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffd75e, #eeb000);
+  color: #171204;
+  font-size: 29px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-align: center;
+}
+.sum-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 48px; padding-top: 12px; }
+.sum-col-h {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink-dim);
+  letter-spacing: 0.14em;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--panel-line);
+}
+.sum-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: 27px;
+  padding: 9px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.sum-row .nm { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sum-row .fig { margin-left: auto; font-weight: 800; white-space: nowrap; }
+.sum-row .fig span { font-weight: 600; color: var(--ink-dim); }
+.sum-meta { padding-top: 16px; font-size: 20px; color: var(--ink-dim); line-height: 1.6; }
+.sum-meta .lab { font-size: 15px; font-weight: 800; letter-spacing: 0.14em; color: var(--accent); margin-right: 12px; }
+.sum-chart { margin-top: 18px; }
+.sum-chart-head { display: flex; align-items: center; font-size: 15px; font-weight: 800; color: var(--ink-dim); letter-spacing: 0.14em; margin-bottom: 10px; }
+.sum-chart-key { margin-left: auto; display: flex; align-items: center; gap: 8px; letter-spacing: 0.1em; }
+.sum-chart-key .kdot { width: 10px; height: 10px; border-radius: 50%; background: #e01e37; }
+.sum-chart svg { display: block; width: 100%; height: auto; }
+
+/* ---- lineups ------------------------------------------------------------ */
+
+.lineups-card { width: 1320px; }
+.lu-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 52px; padding-top: 14px; }
+.lu-team { display: flex; align-items: center; gap: 14px; padding-bottom: 12px; border-bottom: 3px solid var(--team, var(--accent)); }
+.lu-chip { width: 10px; height: 38px; border-radius: 5px; background: var(--team, var(--accent)); flex: none; }
+.lu-short { font-size: 30px; font-weight: 900; letter-spacing: 0.06em; }
+.lu-full { margin-left: auto; font-size: 20px; font-weight: 600; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-p {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  font-size: 24px;
+  padding: 6px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.lu-n { width: 30px; text-align: right; font-size: 17px; font-weight: 700; color: var(--ink-dim); flex: none; }
+.lu-nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-toss { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--panel-line); text-align: center; font-size: 23px; }
+.lu-toss .lab {
+  display: inline-block;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #171204;
+  background: var(--accent);
+  border-radius: 6px;
+  padding: 4px 11px;
+  margin-right: 14px;
+  vertical-align: 3px;
+}
+
+/* ---- target ------------------------------------------------------------- */
+
+.target-card { width: 980px; text-align: center; }
+.target-card .ocard-body { padding: 30px 56px 36px; }
+.tg-label { font-size: 25px; font-weight: 900; letter-spacing: 0.3em; color: var(--accent); }
+/* hero number: proportional figures read better than tabular at this size */
+.tg-num { font-size: 170px; font-weight: 900; line-height: 1; margin-top: 4px; font-variant-numeric: normal; }
+.tg-chaseline { margin-top: 14px; font-size: 27px; font-weight: 800; color: var(--accent); letter-spacing: 0.05em; }
+.tg-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 28px; }
+.tg-stats.duo { grid-template-columns: 1fr 1fr; }
+.tg-stat {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+  padding: 16px 10px 18px;
+}
+.tg-stat .lab { font-size: 16px; font-weight: 800; color: var(--ink-dim); letter-spacing: 0.18em; }
+.tg-stat .val { font-size: 58px; font-weight: 900; line-height: 1.05; margin-top: 7px; }
+.tg-score { margin-top: 24px; font-size: 25px; font-weight: 600; color: var(--ink-dim); }
+.tg-score b { color: var(--ink); font-weight: 800; }
+.tg-bar { height: 12px; margin-top: 15px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.tg-bar-fill { height: 100%; border-radius: 999px; background: var(--team, var(--accent)); transition: width 0.24s var(--ease); }

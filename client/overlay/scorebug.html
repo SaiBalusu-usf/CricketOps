@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scorebug — ICAT Cricket Live</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/client/overlay/base.css">
+</head>
+<body>
+  <div id="stage"></div>
+  <script type="module">
+    import { bootScorebug } from '/client/overlay/scorebug.js';
+    bootScorebug(); // bar only — layer /overlay/full (or a stinger source) on top for fx
+  </script>
+</body>
+</html>
