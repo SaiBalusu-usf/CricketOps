@@ -1,0 +1,12 @@
+{
+  "name": "ICAT Cricket Live",
+  "short_name": "ICAT Cricket",
+  "description": "Ball-by-ball cricket scoring with broadcast overlays",
+  "start_url": "/console",
+  "display": "standalone",
+  "background_color": "#f4f6f8",
+  "theme_color": "#10151d",
+  "icons": [
+    { "src": "/client/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

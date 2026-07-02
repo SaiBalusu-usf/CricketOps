@@ -1,0 +1,78 @@
+/* Broadcast overlay base — every /overlay/* page uses this.
+   Pages render a fixed 1920×1080 #stage on a transparent body so OBS
+   composites them over the camera. body.chroma = green fallback.
+   Target: OBS embedded Chromium (CEF) — no bleeding-edge CSS here. */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+}
+body.chroma { background: #00b140; }
+
+:root {
+  --accent: #f5b301;
+  --ink: #ffffff;
+  --ink-dim: rgba(255, 255, 255, 0.72);
+  --panel-hi: rgba(18, 24, 38, 0.94);
+  --panel-lo: rgba(8, 12, 20, 0.96);
+  --panel-line: rgba(255, 255, 255, 0.09);
+  --safe: 64px;
+  --ease: cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+#stage {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+}
+
+/* glassy broadcast panel */
+.panel {
+  background: linear-gradient(180deg, var(--panel-hi), var(--panel-lo));
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+}
+
+/* team colour chip: set --team inline */
+.chip {
+  display: inline-block;
+  width: 8px;
+  align-self: stretch;
+  border-radius: 4px;
+  background: var(--team, #8a93a3);
+}
+
+/* show/hide with broadcast-grade motion */
+.fade {
+  transition: opacity 0.24s var(--ease), transform 0.24s var(--ease);
+  opacity: 1;
+  transform: translateY(0);
+}
+.fade.hidden {
+  opacity: 0;
+  transform: translateY(14px);
+  pointer-events: none;
+}
+
+.accent { color: var(--accent); }
+.dim { color: var(--ink-dim); }
+.up { text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* shared table styling for card panels */
+.otable { width: 100%; border-collapse: collapse; }
+.otable th, .otable td { padding: 10px 14px; text-align: left; }
+.otable th {
+  font-size: 22px; font-weight: 700; color: var(--ink-dim);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--panel-line);
+}
+.otable td { font-size: 30px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+.otable td.r, .otable th.r { text-align: right; }
+.otable tr.hl td { color: var(--accent); }

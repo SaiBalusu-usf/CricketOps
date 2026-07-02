@@ -1,0 +1,25 @@
+{
+  "name": "icat-cricket-live",
+  "version": "1.0.0",
+  "description": "ICAT Cricket Live — ball-by-ball scoring, broadcast overlays for OBS/YouTube Live, director panel and public live scores. 100% free to run, no API keys.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test \"engine/tests/*.test.js\"",
+    "demo": "node scripts/demo.js",
+    "acceptance": "node scripts/acceptance.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.49.1"
+  }
+}
