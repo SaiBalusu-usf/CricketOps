@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Program feed — ICAT Cricket Live</title>
+  <link rel="icon" href="/client/icons/icon.svg">
+  <style>
+    /* clean camera feed for OBS — solid black, no chrome; the overlay is a
+       separate OBS source, exactly like a hardware camera would be */
+    html, body { margin: 0; padding: 0; background: #000; width: 100%; height: 100%; overflow: hidden; }
+    #feed { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+    #slate {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 12px;
+      background: #05070a; color: #cfd8e3;
+      font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+    }
+    #slate .dot { width: 14px; height: 14px; border-radius: 50%; background: #b3261e; animation: blink 1.2s infinite; }
+    #slate.hidden { display: none; }
+    @keyframes blink { 50% { opacity: 0.3; } }
+  </style>
+</head>
+<body>
+  <video id="feed" autoplay playsinline muted></video>
+  <div id="slate"><div class="dot"></div><div id="slateText">Waiting for the camera phone…</div></div>
+  <script type="module" src="/client/stream/program.js"></script>
+</body>
+</html>

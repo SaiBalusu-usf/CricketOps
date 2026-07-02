@@ -627,17 +627,74 @@ export async function openEditBallSheet(ctx, seq) {
         segmented([0, 1, 2, 3, 4].map((n) => ({ value: n, label: String(n) })), extraRuns, (v) => { extraRuns = v; })) : null,
       ev.wicket ? toggleRow(`Keep wicket (${KIND_LABELS[ev.wicket.kind] || ev.wicket.kind})`,
         'Turn off to make this delivery not-out', keepWicket, (v) => { keepWicket = v; }) : null,
-      h('button', { class: 'btn primary', onclick: async () => {
+      h('button', { class: 'btn primary', onclick: async (e) => {
+        const btn = e.currentTarget;
+        if (btn.disabled) return; // in-flight guard: an ack-timeout retap must not double-edit
+        btn.disabled = true;
         const next = { ...ev, legality, batRuns, extraRuns };
         if (extraType && legality !== 'wide') next.extraType = extraType; else delete next.extraType;
         if (!keepWicket) delete next.wicket;
         const res = await ctx.app.edit(seq, next);
+        btn.disabled = false;
         if (!res.ok) { toast((res.errors || ['edit failed']).join(' · '), 'danger'); return; }
         closeSheet();
         if (res.anomalies && res.anomalies.length) {
           toast(`Edited — ${res.anomalies.length} anomal${res.anomalies.length === 1 ? 'y' : 'ies'} flagged`, 'warn');
         } else toast('Delivery updated');
       } }, 'Save changes'));
+  };
+  draw();
+}
+
+// ---------------------------------------------------------------------------
+// Offline-queue conflict review (A2): balls scored on this phone while
+// scoring continued elsewhere. Nothing auto-applies — the scorer decides.
+// ---------------------------------------------------------------------------
+
+function describeQueuedEvent(ev) {
+  if (ev.type === 'BALL') {
+    const bits = [];
+    if (ev.legality === 'wide') bits.push(`wide${ev.extraRuns ? ` +${ev.extraRuns}` : ''}`);
+    else if (ev.legality === 'noball') bits.push(`no-ball${ev.batRuns ? ` +${ev.batRuns}` : ''}`);
+    else if (ev.extraType) bits.push(`${ev.extraRuns} ${ev.extraType === 'bye' ? 'bye' : 'leg bye'}${ev.extraRuns === 1 ? '' : 's'}`);
+    else bits.push(`${ev.batRuns || 0} run${(ev.batRuns || 0) === 1 ? '' : 's'}`);
+    if (ev.wicket) bits.push(`WICKET (${ev.wicket.kind})`);
+    return `Ball — ${bits.join(', ')}`;
+  }
+  return ev.type.replace(/_/g, ' ').toLowerCase();
+}
+
+export function openQueueReviewSheet(ctx) {
+  const s = openSheet('queueReview', { title: 'Balls scored while offline', dismissable: false });
+  const draw = () => {
+    const items = ctx.app.queuedEvents();
+    s.body.textContent = '';
+    if (!items.length) {
+      ctx.app.unfreezeQueue();
+      closeSheet();
+      toast('Offline queue resolved');
+      return;
+    }
+    s.body.append(h('p', { class: 'sheet-note' },
+      `${items.length} ball${items.length === 1 ? '' : 's'} were scored on this phone while offline, `
+      + 'but scoring continued elsewhere. The scoreboard has moved on — resend each ball only if it is still missing from the log.'));
+    items.forEach((item, i) => {
+      s.body.append(h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--line)' } },
+        h('div', { class: 'grow' },
+          h('div', {}, describeQueuedEvent(item.event)),
+          h('div', { class: 'small muted num' }, `queued at version ${item.baseVersion}`)),
+        h('button', { class: 'btn', style: { minWidth: '0' }, onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          const res = await ctx.app.resendQueued(i);
+          if (!res.ok && !res.duplicate) toast((res.errors || res.warnings || ['could not apply']).join(' · '), 'warn');
+          draw();
+        } }, 'Resend'),
+        h('button', { class: 'btn ghost', style: { minWidth: '0' }, onclick: () => { ctx.app.discardQueued(i); draw(); } }, 'Discard')));
+    });
+    s.body.append(h('button', { class: 'btn danger', style: { width: '100%', marginTop: '10px' }, onclick: () => {
+      while (ctx.app.queuedEvents().length) ctx.app.discardQueued(0);
+      draw();
+    } }, 'Discard all'));
   };
   draw();
 }

@@ -72,6 +72,7 @@
       <a id="resumeBtn" class="btn primary wide" href="/console" hidden>Resume scoring</a>
       <a class="btn accent" href="/console?new=1">New match</a>
       <a id="watchBtn" class="btn" href="/matches">Watch live</a>
+      <a id="streamBtn" class="btn" href="/stream">Stream from a phone</a>
       <a class="btn" href="/matches">All matches</a>
       <a class="btn" href="/director">Director panel</a>
       <a class="btn wide ghost" href="/settings">Branding settings</a>
@@ -130,18 +131,26 @@
         r.href = `/console/${info.activeMatchId}`;
         r.hidden = false;
         $('#watchBtn').href = `/live/${info.activeMatchId}`;
+        $('#streamBtn').href = `/stream/${info.activeMatchId}`;
       }
 
-      // OBS overlay URLs — absolute, LAN-reachable
+      // OBS overlay URLs — absolute, LAN-reachable. Pinned with ?match= when a
+      // match exists so a junk match created later can never hijack OBS (B3);
+      // the unpinned form (auto-follows the newest match) still works.
       const base = (info.urls && info.urls[0]) || location.origin;
+      const pin = info.activeMatchId ? `?match=${info.activeMatchId}` : '';
       const box = $('#overlayUrls');
-      for (const kind of ['scorebug', 'full', 'batting', 'bowling', 'summary', 'lineups', 'target']) {
-        const url = `${base}/overlay/${kind}`;
+      const sources = ['scorebug', 'full', 'batting', 'bowling', 'summary', 'lineups', 'target']
+        .map((kind) => [kind, `${base}/overlay/${kind}${pin}`]);
+      sources.push(['camera (phone)', `${base}/stream/program${pin}`]);
+      for (const [kind, url] of sources) {
         box.append(h('div', { class: 'url-row' },
           h('span', { class: 'nm' }, kind),
           h('span', { class: 'u' }, url),
           h('button', { class: 'btn', onclick: async () => { await copyText(url); toast(`${kind} URL copied`); } }, 'Copy')));
       }
+      if (pin) box.append(h('p', { class: 'hint', style: { margin: '8px 4px 2px' } },
+        `Pinned to match ${info.activeMatchId}. Drop the ?match=… part if you want a source that always follows the newest match.`));
 
       // phone QR codes → console
       const phones = $('#phones');

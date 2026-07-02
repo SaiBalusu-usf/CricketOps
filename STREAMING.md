@@ -22,6 +22,28 @@ guide uses — has **no subscriber minimum**. The follower/subscriber
 requirements you may have heard about apply to streaming from the YouTube
 *mobile app*, which we don't use.
 
+## Option B — stream from a phone, no laptop at the ground
+
+If the machine running the server has **ffmpeg** installed (`ffmpeg` on PATH,
+or set `FFMPEG_PATH=`), you can skip OBS entirely:
+
+1. Open `http://<server-address>:3333/stream/<matchId>` on the camera phone
+   and join with the **director PIN**.
+2. Tap **Broadcast…** → paste the stream key from YouTube Studio
+   (**Create → Go live → Streaming software**) → **Save key**. The key is
+   stored on the server only — it is never shown again, never exported, and
+   never appears in any page.
+3. Tap **GO LIVE ON YOUTUBE**. The phone composites the live scorebug onto
+   its camera (720p30, ~2.5 Mbps) and broadcasts through the server. Keep the
+   phone plugged in and **keep the page in the foreground** — the page warns
+   you if it goes to the background, and the director panel shows a live
+   health chip (bitrate · uptime · drops).
+4. To stop: **STOP BROADCAST**. If the connection blips, the stream resumes
+   by itself after a short gap.
+
+Without ffmpeg the same page still works as the wireless camera for OBS
+(Option A below) — the broadcast button simply explains what is missing.
+
 ## 2. OBS setup
 
 Install **OBS Studio** — free, open source, from
@@ -30,20 +52,21 @@ once ("Optimize for streaming") and then set up one scene with three things:
 
 ### Camera
 
-- **USB webcam:** in OBS, **Sources → + → Video Capture Device**, pick the
-  camera. Simplest and most reliable option.
-- **Phone as camera** (better lens, but more moving parts — be honest with
-  yourself about complexity on match day):
-  - **DroidCam** (Android/iOS): phone app + OBS plugin/client. The free tier
-    is limited to 480p; HD needs the paid version.
-  - **IP Webcam** (Android, free): the phone serves a video URL on your
-    hotspot; add it in OBS as a **Media Source** (or Browser source) pointing
-    at the URL the app shows.
-  - **Check the app's current terms before match day** — free tiers and
-    limits change often.
-  - The zero-software option: a cheap **HDMI capture card** plus a
-    phone/camcorder with HDMI out shows up in OBS as a normal Video Capture
-    Device.
+- **Phone as camera — built in, free, HD (recommended):** open
+  `http://<laptop-address>:3333/stream/<matchId>` on the camera phone, enter
+  the **director PIN**, and the phone becomes a wireless camera. In OBS add
+  **Sources → + → Browser** with URL
+  `http://localhost:3333/stream/program?match=<matchId>`, width 1920,
+  height 1080 — the phone's camera appears as a clean feed over your
+  hotspot (no third-party apps, no 480p limits, no watermarks). The phone
+  shows a live program preview with the scorebug so the streamer can frame
+  the shot. If the feed drops, the page shows a "reconnecting…" slate and
+  recovers by itself.
+- **USB webcam:** **Sources → + → Video Capture Device**, pick the camera.
+  Simplest wiring of all, if the lens is good enough.
+- The zero-software option: a cheap **HDMI capture card** plus a
+  phone/camcorder with HDMI out shows up in OBS as a normal Video Capture
+  Device.
 - Test whatever you choose at home first, on the hotspot you'll actually use.
 
 ### Microphone
@@ -99,13 +122,15 @@ simply won't offer "Go live" until it's done.
 
 Print this.
 
-- [ ] Charge: laptop, camera/phone-camera, scorer's phone, hotspot phone. Bring a power bank.
+- [ ] Charge: laptop, **streamer phone** (bring its cable — it films the whole match), scorer's phone, hotspot phone. Bring a power bank.
 - [ ] Start the hotspot; connect the **laptop** to it.
 - [ ] On the laptop: `npm start` in the CricketOps folder.
 - [ ] Create the match at `http://localhost:3333` → **write down both PINs** (shown once).
 - [ ] Scorer's phone: same hotspot → scan the QR on the landing page → console → scorer PIN.
+- [ ] Streamer phone: open `/stream/<matchId>` → director PIN → frame the pitch; **keep the page foregrounded**, disable auto-lock.
 - [ ] Score one practice ball, see it on the overlay, then **undo** it.
-- [ ] OBS scene check: camera framed, overlay on top, mic meter moving.
+- [ ] OBS scene check: camera framed (or `/stream/program` source live), overlay on top, mic meter moving.
+- [ ] Phone-only broadcast? Test **GO LIVE → 30 seconds → STOP** once; check the health chip on the director panel.
 - [ ] **Record 30 seconds** (Start Recording, not streaming) and play it back — picture and sound.
 - [ ] YouTube Studio → Go live; Start Streaming in OBS; confirm the dashboard shows green.
 - [ ] Start scoring for real.

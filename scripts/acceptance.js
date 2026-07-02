@@ -16,7 +16,7 @@
  *
  * Uses a throwaway DATA_DIR so real match data is never touched.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -49,7 +49,9 @@ async function stepImpl(name, fn) {
 let server = null;
 async function startServer() {
   server = spawn(process.execPath, ['server/index.js'], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR },
+    // STREAM_TEST_OUTPUT makes stream:start pipe into ffmpeg's null muxer
+    // instead of RTMP, so the Tier-2 smoke test needs no YouTube account
+    env: { ...process.env, PORT: String(PORT), DATA_DIR, STREAM_TEST_OUTPUT: 'null' },
     stdio: 'ignore',
   });
   for (let i = 0; i < 60; i++) {
@@ -334,6 +336,8 @@ async function main() {
     );
     assert.equal(snap.state.result.text, stateBefore.result.text);
     MATCH.id = imp.id;
+    MATCH.scorerPin = imp.scorerPin;
+    MATCH.directorPin = imp.directorPin;
   });
 
   await step('7. every overlay route at 1920×1080: no JS errors, transparent, screenshots', async () => {
@@ -359,6 +363,242 @@ async function main() {
     assert.deepEqual(errors, [], `overlay problems:\n${errors.join('\n')}`);
   });
 
+  // ---- upgraded-scope steps (Parts A–D regressions) -----------------------
+
+  const freshSocket = () => io(BASE, { transports: ['websocket'] });
+  const joinAs = (sock, role, pin, extra = {}) => new Promise((resolve, reject) => {
+    const doJoin = () => sock.emit('join', { matchId: MATCH.id, role, pin, ...extra }, resolve);
+    if (sock.connected) doJoin(); else sock.once('connect', doJoin);
+    setTimeout(() => reject(new Error('join timeout')), 5000);
+  });
+  const emitOn = (sock, name, payload) => new Promise((resolve, reject) => {
+    sock.emit(name, payload, resolve);
+    setTimeout(() => reject(new Error(`${name} ack timeout`)), 5000);
+  });
+
+  await step('8. URL matrix: every route answers with its required status', async () => {
+    const checks = [
+      ['/', 200], ['/console', 200], ['/console/', 200], [`/console/${MATCH.id}`, 200],
+      ['/console/bogus-id', 200], ['/director', 200], [`/director/${MATCH.id}`, 200],
+      [`/live/${MATCH.id}`, 200], [`/live/${MATCH.id}/`, 200], ['/matches', 200],
+      ['/settings', 200], ['/stream', 200], [`/stream/${MATCH.id}`, 200],
+      ['/stream/program', 200], [`/stream/program?match=${MATCH.id}`, 200],
+      ['/overlay/scorebug', 200], ['/overlay/full', 200], ['/overlay/junk', 404],
+      ['/manifest.webmanifest', 200], ['/sw.js', 200], ['/favicon.ico', 200],
+      ['/api/nope', 404], ['/healthz', 200],
+    ];
+    const problems = [];
+    for (const [p, want] of checks) {
+      const r = await fetch(`${BASE}${p}`, { redirect: 'manual' });
+      if (r.status !== want) problems.push(`${p} → ${r.status} (wanted ${want})`);
+    }
+    const redir = await fetch(`${BASE}/live`, { redirect: 'manual' });
+    if (redir.status !== 302 || !/\/matches$/.test(redir.headers.get('location') || '')) {
+      problems.push(`/live → ${redir.status} ${redir.headers.get('location')} (wanted 302 → /matches)`);
+    }
+    const fav = await fetch(`${BASE}/favicon.ico`);
+    if (!/svg|icon/.test(fav.headers.get('content-type') || '')) problems.push(`favicon content-type ${fav.headers.get('content-type')}`);
+    const api404 = await fetch(`${BASE}/api/definitely-not-a-thing`);
+    if (!/json/.test(api404.headers.get('content-type') || '')) problems.push('unknown /api/* is not JSON');
+
+    // the server must shrug off junk without dying (B4)
+    const badJson = await fetch(`${BASE}/api/matches`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
+    });
+    if (badJson.status >= 500) problems.push(`malformed JSON body → ${badJson.status} (should be 4xx)`);
+    const junkSock = io(BASE, { transports: ['websocket'] });
+    await new Promise((r) => junkSock.on('connect', r));
+    junkSock.emit('append');                 // no payload, no ack
+    junkSock.emit('stream:chunk', 12345);    // nonsense payload
+    junkSock.emit('join', { role: { weird: true } }, () => {});
+    junkSock.emit('edit', { matchId: MATCH.id, seq: -5 }, () => {});
+    await new Promise((r) => setTimeout(r, 300));
+    junkSock.close();
+    const alive = await fetch(`${BASE}/healthz`);
+    if (!alive.ok) problems.push('server died after junk payloads');
+    assert.deepEqual(problems, []);
+  });
+
+  await step('9. A1 regression: a revoked scorer cannot append, undo, or edit', async () => {
+    const a = freshSocket();
+    const b = freshSocket();
+    try {
+      const ja = await joinAs(a, 'scorer', MATCH.scorerPin, { clientId: 'devA' });
+      assert.ok(ja.ok, `A join: ${JSON.stringify(ja)}`);
+      let revokedSeen = false;
+      a.on('scorer-revoked', () => { revokedSeen = true; });
+      const jb = await joinAs(b, 'scorer', MATCH.scorerPin, { clientId: 'devB', takeover: true });
+      assert.ok(jb.ok, 'takeover join must succeed');
+      const versionBefore = jb.version;
+
+      const pen = { type: 'PENALTY', teamId: 'A', runs: 5, note: 'stale device', id: 'a1-stale' };
+      const ra = await emitOn(a, 'append', { matchId: MATCH.id, event: pen });
+      assert.equal(ra.ok, false, 'revoked append must fail');
+      assert.equal(ra.revoked, true);
+      const ru = await emitOn(a, 'undo', { matchId: MATCH.id });
+      assert.equal(ru.ok, false);
+      assert.equal(ru.revoked, true);
+      const re = await emitOn(a, 'edit', { matchId: MATCH.id, seq: 3, event: { type: 'BALL', legality: 'legal', batRuns: 0, extraRuns: 0 } });
+      assert.equal(re.ok, false);
+      assert.equal(re.revoked, true);
+
+      const rb = await emitOn(b, 'append', { matchId: MATCH.id, event: { ...pen, id: 'b1-real', note: 'from the live device' } });
+      assert.ok(rb.ok, `B append: ${JSON.stringify(rb)}`);
+      assert.equal(rb.version, versionBefore + 1, "only B's append landed");
+      assert.ok(revokedSeen, 'A received scorer-revoked');
+      const ub = await emitOn(b, 'undo', { matchId: MATCH.id });
+      assert.ok(ub.ok);
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
+
+  await step('10. A2 regression: stale expectedVersion returns versionConflict', async () => {
+    const s = freshSocket();
+    try {
+      const j = await joinAs(s, 'scorer', MATCH.scorerPin, { clientId: 'devC', takeover: true });
+      assert.ok(j.ok);
+      const pen = { type: 'PENALTY', teamId: 'A', runs: 5, note: 'queued offline', id: 'a2-q1' };
+      const stale = await emitOn(s, 'append', { matchId: MATCH.id, event: pen, expectedVersion: j.version - 1 });
+      assert.equal(stale.ok, false);
+      assert.equal(stale.versionConflict, true);
+      assert.equal(stale.needsForce, true);
+      const fine = await emitOn(s, 'append', { matchId: MATCH.id, event: pen, expectedVersion: j.version });
+      assert.ok(fine.ok, `matching expectedVersion must append: ${JSON.stringify(fine)}`);
+      const undo = await emitOn(s, 'undo', { matchId: MATCH.id });
+      assert.ok(undo.ok);
+    } finally {
+      s.close();
+    }
+  });
+
+  let streamerSock = null;
+  await step('11. streamer role: lock + takeover + status + key hygiene', async () => {
+    const s1 = freshSocket();
+    const s2 = freshSocket();
+    const j1 = await joinAs(s1, 'streamer', MATCH.directorPin, { clientId: 'cam1' });
+    assert.ok(j1.ok, `streamer join: ${JSON.stringify(j1)}`);
+    assert.equal(j1.role, 'streamer');
+    const st0 = await emitOn(s1, 'stream:status', { matchId: MATCH.id });
+    assert.ok(st0.ok);
+    assert.equal(st0.live, false);
+
+    const j2a = await joinAs(s2, 'streamer', MATCH.directorPin, { clientId: 'cam2' });
+    assert.equal(j2a.ok, false);
+    assert.equal(j2a.error, 'streamer-active');
+    let s1revoked = false;
+    s1.on('streamer-revoked', () => { s1revoked = true; });
+    const j2b = await emitOn(s2, 'join', { matchId: MATCH.id, role: 'streamer', pin: MATCH.directorPin, clientId: 'cam2', takeover: true });
+    assert.ok(j2b.ok, 'streamer takeover must succeed');
+
+    const kOld = await emitOn(s1, 'stream:set-key', { matchId: MATCH.id, key: 'SHOULD-NOT-WORK' });
+    assert.equal(kOld.ok, false);
+    assert.equal(kOld.revoked, true);
+    const k = await emitOn(s2, 'stream:set-key', { matchId: MATCH.id, key: 'test-KEY-abcd' });
+    assert.ok(k.ok);
+    assert.equal(k.keyTail, '…abcd');
+    assert.ok(s1revoked, 's1 received streamer-revoked');
+
+    // the key must never leave the server: not in snapshots, exports,
+    // status payloads, or any non-0600 file
+    const snap = JSON.stringify(await (await fetch(`${BASE}/api/matches/${MATCH.id}`)).json());
+    const exp2 = JSON.stringify(await (await fetch(`${BASE}/api/matches/${MATCH.id}/export`)).json());
+    assert.ok(!snap.includes('test-KEY'), 'key leaked into the snapshot');
+    assert.ok(!exp2.includes('test-KEY'), 'key leaked into the export');
+    const st1 = await emitOn(s2, 'stream:status', { matchId: MATCH.id });
+    assert.ok(!JSON.stringify(st1).includes('test-KEY'), 'key leaked into status');
+    assert.equal(st1.hasKey, true);
+    const streamFile = path.join(DATA_DIR, 'matches', MATCH.id, 'stream.json');
+    assert.equal(fs.statSync(streamFile).mode & 0o777, 0o600, 'stream.json must be 0600');
+    for (const f of ['events.ndjson', 'meta.json', 'presentation.json']) {
+      assert.ok(!fs.readFileSync(path.join(DATA_DIR, 'matches', MATCH.id, f), 'utf8').includes('test-KEY'), `key leaked into ${f}`);
+    }
+    s1.close();
+    streamerSock = s2;
+  });
+
+  await step('12. Tier-2 ffmpeg pipe smoke test (skips cleanly without ffmpeg)', async () => {
+    const info = await (await fetch(`${BASE}/api/info`)).json();
+    if (!info.streaming || !info.streaming.rtmp) {
+      console.log('    skipped: no ffmpeg on this host');
+      return;
+    }
+    const ff = process.env.FFMPEG_PATH || 'ffmpeg';
+    const sample = path.join(WORK, 'sample.webm');
+    // Preferred clip source: a REAL MediaRecorder in headless Chromium — the
+    // exact encode path the streamer phone uses. Fallback: ffmpeg rawvideo.
+    let haveClip = false;
+    try {
+      const { chromium } = await import('playwright-core');
+      const exe = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+      const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
+      try {
+        const page = await browser.newPage();
+        const b64 = await page.evaluate(async () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 320; canvas.height = 240;
+          const ctx = canvas.getContext('2d');
+          let hue = 0;
+          const iv = setInterval(() => {
+            ctx.fillStyle = `hsl(${hue = (hue + 7) % 360},80%,50%)`;
+            ctx.fillRect(0, 0, 320, 240);
+          }, 33);
+          const stream = canvas.captureStream(15);
+          const rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
+          const chunks = [];
+          rec.ondataavailable = (e) => chunks.push(e.data);
+          const stopped = new Promise((r) => { rec.onstop = r; });
+          rec.start(500);
+          await new Promise((r) => setTimeout(r, 2500));
+          rec.stop();
+          await stopped;
+          clearInterval(iv);
+          const buf = await new Blob(chunks, { type: 'video/webm' }).arrayBuffer();
+          let s = '';
+          const u8 = new Uint8Array(buf);
+          for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+          return btoa(s);
+        });
+        fs.writeFileSync(sample, Buffer.from(b64, 'base64'));
+        haveClip = fs.statSync(sample).size > 1000;
+      } finally {
+        await browser.close();
+      }
+    } catch { /* no chromium — try ffmpeg below */ }
+    if (!haveClip) {
+      const W = 320, H = 240, FRAMES = 30;
+      const raw = Buffer.alloc(W * H * 3 * FRAMES);
+      for (let f = 0; f < FRAMES; f++) raw.fill((f * 8) % 255, f * W * H * 3, (f + 1) * W * H * 3);
+      const g = spawnSync(ff, ['-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${W}x${H}`, '-r', '15',
+        '-i', 'pipe:0', '-c:v', 'libvpx', '-b:v', '200k', '-an', sample],
+      { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000, maxBuffer: 64 * 1024 * 1024 });
+      haveClip = g.status === 0 && fs.existsSync(sample);
+    }
+    if (!haveClip) {
+      console.log('    skipped: could not generate a test clip on this host');
+      return;
+    }
+    const s2 = streamerSock;
+    assert.ok(s2, 'streamer socket from step 11');
+    const start = await emitOn(s2, 'stream:start', { matchId: MATCH.id, mimeType: 'video/webm;codecs=vp8' });
+    assert.ok(start.ok, `stream:start: ${JSON.stringify(start)}`);
+    assert.equal(start.test, true, 'test output must be active');
+    const bytes = fs.readFileSync(sample);
+    for (let o = 0; o < bytes.length; o += 65536) {
+      s2.emit('stream:chunk', { matchId: MATCH.id, seq: o / 65536, data: bytes.subarray(o, o + 65536) });
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    const st = await emitOn(s2, 'stream:status', { matchId: MATCH.id });
+    assert.ok(st.ffmpegAlive, `ffmpeg pipe died: ${st.lastError}`);
+    assert.ok(st.kbps > 0, 'no throughput measured');
+    const stop = await emitOn(s2, 'stream:stop', { matchId: MATCH.id });
+    assert.ok(stop.ok);
+    const clear = await emitOn(s2, 'stream:clear-key', { matchId: MATCH.id });
+    assert.ok(clear.ok);
+  });
+
+  streamerSock?.close();
   socket?.close();
   await killServer();
 

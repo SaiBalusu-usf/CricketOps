@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e13">
+  <title>Streamer — ICAT Cricket Live</title>
+  <link rel="icon" href="/client/icons/icon.svg">
+  <link rel="stylesheet" href="/client/shared/base.css">
+  <link rel="stylesheet" href="/client/overlay/base.css">
+  <link rel="stylesheet" href="/client/stream/stream.css">
+</head>
+<body class="dark stream-body">
+  <div id="gate" class="gate hidden"></div>
+  <div id="main" class="hidden">
+    <video id="cam" autoplay playsinline muted></video>
+    <div id="bugWrap"><div id="stage"></div></div>
+    <div id="topbar">
+      <span id="conn" class="conn"></span>
+      <span id="scoreline" class="scoreline num"></span>
+      <span id="battery" class="battery num"></span>
+    </div>
+    <div id="banner" class="banner hidden"></div>
+    <div id="controls">
+      <div class="ctl-row">
+        <button id="flipBtn" class="cbtn" type="button">Flip</button>
+        <button id="torchBtn" class="cbtn" type="button">Torch</button>
+        <select id="resSel" class="cbtn">
+          <option value="720">720p</option>
+          <option value="1080">1080p</option>
+        </select>
+        <button id="bcastBtn" class="cbtn rec" type="button">Broadcast…</button>
+      </div>
+    </div>
+    <div id="bcast" class="bcast hidden"></div>
+  </div>
+  <script type="module" src="/client/stream/stream.js"></script>
+</body>
+</html>

@@ -11,7 +11,7 @@ import { connect, fmt, $, h, teamOf, playerName } from '/client/shared/app.js';
 import {
   initTheme, themeToggle, toast, openSheet, closeSheet, sheetKind, confirmSheet,
   liveInn, openOpenersSheet, openBowlerSheet, openNewBatterSheet, openWicketSheet,
-  openMoreSheet, openAnomaliesSheet, openEditBallSheet,
+  openMoreSheet, openAnomaliesSheet, openEditBallSheet, openQueueReviewSheet,
 } from '/client/console/ui.js';
 import { renderHome, renderWizard } from '/client/console/wizard.js';
 
@@ -69,11 +69,19 @@ async function startMatch(matchId) {
     return res;
   }
 
+  let undoBusy = false; // in-flight guard: a retap during an ack timeout must not double-undo
   async function doUndo() {
-    if (readOnly() || !app.online) return;
-    const res = await app.undo();
-    if (res.ok) toast(`Undid: ${res.undone ? res.undone.type.replace(/_/g, ' ').toLowerCase() : 'last event'}`);
-    else toast((res.errors || ['nothing to undo']).join(' · '), 'warn');
+    if (readOnly() || !app.online || undoBusy) return;
+    undoBusy = true;
+    renderDock();
+    try {
+      const res = await app.undo();
+      if (res.ok) toast(`Undid: ${res.undone ? res.undone.type.replace(/_/g, ' ').toLowerCase() : 'last event'}`);
+      else toast((res.errors || ['nothing to undo']).join(' · '), 'warn');
+    } finally {
+      undoBusy = false;
+      renderDock();
+    }
   }
 
   const ctx = {
@@ -105,12 +113,13 @@ async function startMatch(matchId) {
   app = await connect({
     matchId, role: 'scorer', pin, follow: false,
     onState(st) { state = st; render(); watchNeeds(); },
-    onStatus(s) { handleStatus(s); },
+    onStatus(s, res) { handleStatus(s, res); },
     onQueue(n) { ui.queued = n; renderHeader(); renderDock(); },
     onQueueDrop(ev, errs) { toast(`Dropped queued ${ev.type}: ${(errs || []).join(', ')}`, 'danger'); },
+    onQueueConflict() { openQueueReviewSheet(ctx); },
   });
 
-  async function handleStatus(s) {
+  async function handleStatus(s, res = {}) {
     const prev = ui.status;
     ui.status = s;
     if (s === 'bad-pin') {
@@ -121,12 +130,39 @@ async function startMatch(matchId) {
       app.rejoin({ pin: fresh });
       return;
     }
+    if (s === 'locked-out') { renderLockout(res.retryInMs || 30000); return; }
     if (s === 'scorer-active') { renderTakeover(); return; }
     if (s === 'no-match') { renderNoMatch(); return; }
     if (s === 'revoked') { ui.revoked = true; render(); return; }
-    if (s === 'online' && !readOnly()) ui.revoked = false;
+    if (s === 'online' && !readOnly()) {
+      ui.revoked = false;
+      // balls queued while this phone was offline/revoked never auto-apply —
+      // the scorer reviews them (A2)
+      if (app && app.queueFrozen && app.queuedEvents().length) openQueueReviewSheet(ctx);
+    }
     if (s === 'online' || prev === 'online') render();
     else { renderHeader(); renderDock(); }
+  }
+
+  function renderLockout(ms) {
+    dock.textContent = '';
+    main.textContent = '';
+    const num = h('div', { class: 'page-title num' }, '');
+    main.append(h('div', { class: 'page pin-screen' },
+      h('div', { class: 'page-title' }, 'Too many wrong PINs'),
+      h('p', { class: 'page-sub' }, 'This device is locked out for a moment. It will ask again automatically.'),
+      num));
+    const until = Date.now() + ms;
+    const t = setInterval(async () => {
+      const left = until - Date.now();
+      if (left > 0) { num.textContent = `${Math.ceil(left / 1000)}s`; return; }
+      clearInterval(t);
+      localStorage.removeItem(pinKey);
+      const fresh = await promptPin(matchId, 'Try the PIN again.');
+      localStorage.setItem(pinKey, fresh);
+      renderConnecting();
+      app.rejoin({ pin: fresh });
+    }, 250);
   }
 
   function renderConnecting() {
@@ -177,7 +213,9 @@ async function startMatch(matchId) {
     main.append(h('div', { class: 'page pin-screen' },
       h('div', { class: 'page-title' }, 'Match not found'),
       h('p', { class: 'page-sub' }, `No match “${matchId}” on this server.`),
-      h('div', { class: 'result-actions' }, h('a', { class: 'btn primary', href: '/console' }, 'Back to matches'))));
+      h('div', { class: 'result-actions' },
+        h('a', { class: 'btn primary', href: '/matches' }, 'All matches'),
+        h('a', { class: 'btn accent', href: '/console?new=1' }, 'Start a new match'))));
   }
 
   // -------------------------------------------------------------------------
@@ -437,7 +475,7 @@ async function startMatch(matchId) {
 
     dock.append(h('div', { class: 'undo-row' },
       h('button', {
-        class: 'undo-btn', disabled: readOnly() || !app || !app.online, onclick: doUndo,
+        class: 'undo-btn', disabled: readOnly() || !app || !app.online || undoBusy, onclick: doUndo,
       }, 'UNDO LAST')));
 
     if (ui.padMode !== 'main') { dock.append(chooser(canBall)); return; }

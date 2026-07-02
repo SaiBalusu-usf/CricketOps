@@ -1,0 +1,70 @@
+/* Streamer phone surface — dark control-room over a full-bleed camera. */
+
+.stream-body { background: #05070a; overflow: hidden; position: fixed; inset: 0; }
+.hidden { display: none !important; }
+
+#cam {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; background: #000;
+}
+
+/* the DOM scorebug preview: a real 1920×1080 stage scaled to the phone,
+   sitting just above the control row so nothing hides the bar */
+#bugWrap {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 62px);
+  pointer-events: none;
+}
+#bugWrap #stage { position: absolute; left: 0; bottom: 0; }
+
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: calc(env(safe-area-inset-top, 0px) + 8px) 12px 8px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.65), transparent);
+  color: #fff; font-size: 13px; z-index: 5;
+}
+#topbar .scoreline { flex: 1; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#topbar .battery { opacity: 0.85; }
+
+.banner {
+  position: fixed; top: 20%; left: 12px; right: 12px; z-index: 9;
+  background: #b3261e; color: #fff; font-weight: 700;
+  padding: 12px 14px; border-radius: 10px; text-align: center;
+}
+.banner.info { background: #0b57d0; }
+
+#controls {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  z-index: 6; padding: 0 10px;
+}
+.ctl-row { display: flex; gap: 8px; justify-content: center; }
+.cbtn {
+  min-height: 44px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.25);
+  background: rgba(10,14,22,0.75); color: #fff; font: inherit; font-weight: 700;
+}
+.cbtn.rec { background: #b3261e; border-color: #b3261e; }
+.cbtn.rec.live { animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: 0.6; } }
+
+.gate {
+  position: fixed; inset: 0; z-index: 20; overflow: auto;
+  background: var(--bg); padding: 24px 16px;
+  display: flex; flex-direction: column; gap: 14px; align-items: center;
+  justify-content: center; text-align: center;
+}
+.gate .card { width: min(420px, 100%); }
+
+.bcast {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 15;
+  background: var(--panel); color: var(--fg);
+  border-radius: 16px 16px 0 0; padding: 16px;
+  max-height: 75vh; overflow: auto;
+  box-shadow: 0 -8px 40px rgba(0,0,0,0.6);
+}
+.bcast h3 { margin-top: 0; }
+.bcast .stat-row { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; }
+.bcast .stat-row b { font-size: 18px; }
+.recbtn { width: 100%; margin-top: 10px; }

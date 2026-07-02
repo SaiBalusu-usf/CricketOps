@@ -1,7 +1,9 @@
 /* Offline shell for the console & live pages (overlays never register this —
    OBS runs against localhost anyway). Strategy: network first, cache
    fallback, for same-origin GETs that are not API or socket traffic. */
-const CACHE = 'icat-cricket-v1';
+// BUMP this version string whenever any client file changes, or phones keep
+// running the old console from cache after an update.
+const CACHE = 'icat-cricket-v2';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

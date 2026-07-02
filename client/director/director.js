@@ -191,6 +191,7 @@ async function startDirector(matchId) {
   let pres = null;       // local copy — flipped optimistically before the ack
   let status = 'connecting';
   let built = false;
+  let streamStatus = null; // read-only broadcast health (Part D)
   const ui = { penaltyTeam: null };
   const refs = {};
 
@@ -204,15 +205,19 @@ async function startDirector(matchId) {
     matchId, role: 'director', pin, follow: false,
     onState(st) { state = st; updateContext(); updateMatchControl(); },
     onPresentation(p) { pres = p; updatePresentation(); },
-    onStatus(s) { handleStatus(s); },
+    onStatus(s, res) { handleStatus(s, res); },
+    onStreamStatus(s) { streamStatus = s; updateContext(); },
   });
 
-  async function handleStatus(s) {
+  async function handleStatus(s, res = {}) {
     status = s;
-    if (s === 'bad-pin') {
+    if (s === 'bad-pin' || s === 'locked-out') {
       localStorage.removeItem(pinKey);
       built = false;
-      pin = await promptPin(matchId, 'That PIN is not right — try again.');
+      const msg = s === 'locked-out'
+        ? `Too many wrong PINs — this device is locked for ${Math.ceil((res.retryInMs || 30000) / 1000)}s. Wait, then try again.`
+        : 'That PIN is not right — try again.';
+      pin = await promptPin(matchId, msg);
       localStorage.setItem(pinKey, pin);
       renderConnecting();
       app.rejoin({ pin });
@@ -387,9 +392,11 @@ async function startDirector(matchId) {
     refs.conn = h('span', { class: 'conn', title: 'connecting' });
     refs.scoreLine = h('div', { class: 'score-line' });
     refs.sub = h('div', { class: 'score-sub' });
+    refs.streamChip = h('span', { class: 'stream-chip', hidden: true });
     hdr.append(h('div', { class: 'hdr-top' },
       refs.conn,
       h('div', { class: 'hdr-score' }, refs.scoreLine, refs.sub),
+      refs.streamChip,
       h('span', { class: 'hdr-right' }, themeToggle())));
 
     main.textContent = '';
@@ -544,6 +551,21 @@ async function startDirector(matchId) {
     refs.conn.title = status;
     refs.scoreLine.textContent = scoreLine();
     refs.sub.textContent = subLine();
+    // read-only broadcast health chip (Part D): the graphics person sees
+    // stream state without holding the phone
+    const ss = streamStatus;
+    const show = !!(ss && (ss.live || ss.hasKey));
+    refs.streamChip.hidden = !show;
+    if (show) {
+      const up = Math.max(0, ss.uptimeSec | 0);
+      const hh = String(Math.floor(up / 3600)).padStart(2, '0');
+      const mm = String(Math.floor((up % 3600) / 60)).padStart(2, '0');
+      const sec = String(up % 60).padStart(2, '0');
+      refs.streamChip.textContent = ss.live
+        ? `Stream: LIVE · ${((ss.kbps || 0) / 1000).toFixed(1)} Mbps · ${hh}:${mm}:${sec}`
+        : `Stream: ready (${ss.keyTail || 'key set'})`;
+      refs.streamChip.classList.toggle('live', !!ss.live);
+    }
   }
 
   function updatePresentation() {

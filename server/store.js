@@ -116,6 +116,32 @@ export function deleteMatch(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Stream key (Part D) — write-only secret. Never enters state, exports, or
+// logs; stored 0600 beside the match, like meta.json.
+// ---------------------------------------------------------------------------
+
+const streamFile = (id) => path.join(dirOf(id), 'stream.json');
+
+export function writeStreamKey(id, key) {
+  const file = streamFile(id);
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ key }), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+export function readStreamKey(id) {
+  try {
+    return JSON.parse(fs.readFileSync(streamFile(id), 'utf8')).key || null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearStreamKey(id) {
+  fs.rmSync(streamFile(id), { force: true });
+}
+
+// ---------------------------------------------------------------------------
 // Branding
 // ---------------------------------------------------------------------------
 

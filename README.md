@@ -10,6 +10,7 @@ to pay for.
 | Surface | Who uses it | Where |
 |---|---|---|
 | **Scoring console** | the scorer, on a phone | `/console` |
+| **Streamer camera** | a second phone: match camera + broadcast | `/stream` |
 | **Broadcast overlays** | OBS Browser Sources (transparent, 1920×1080) | `/overlay/full` and friends |
 | **Director panel** | whoever runs the stream | `/director` |
 | **Public live scorecard** | players' families, the club group chat | `/live/<matchId>` |
@@ -70,9 +71,35 @@ visit `/console/m-demo`, `/overlay/full`, or `/live/m-demo`.
 | `/overlay/scorebug` | Just the score bar |
 | `/overlay/batting` `/overlay/bowling` `/overlay/summary` `/overlay/lineups` `/overlay/target` | Individual full-screen cards, if you prefer separate OBS sources |
 | `/director` · `/director/<matchId>` | Director panel |
-| `/live/<matchId>` | Public live scorecard |
+| `/live/<matchId>` | Public live scorecard (`/live` alone redirects to `/matches`) |
 | `/matches` | All matches on this server |
 | `/settings` | Branding: org name, logo, accent colour, sponsors |
+| `/stream` · `/stream/<matchId>` | **Stream from a phone**: the phone becomes the match camera (and, with ffmpeg, the whole broadcast rig) |
+| `/stream/program` | The phone camera as a clean feed — add it as an OBS Browser Source |
+
+## Two-phone operation: scorer + streamer
+
+Phone 1 scores at `/console`. Phone 2 opens `/stream/<matchId>`, enters the
+**director PIN**, and becomes the match camera with a live program preview
+(camera + the real scorebug, driven by live state — what the streamer sees is
+what viewers see).
+
+- **With a laptop (Tier 1, always available):** OBS adds
+  `http://localhost:3333/stream/program?match=<id>` as a Browser Source — the
+  phone's camera arrives over Wi-Fi/hotspot WebRTC, replacing DroidCam-style
+  third-party apps. OBS still composites `/overlay/full` on top and encodes to
+  YouTube as usual.
+- **Without a laptop (Tier 2):** install **ffmpeg** on the machine running the
+  server (`ffmpeg` on PATH or `FFMPEG_PATH=…`), and `/stream` grows a
+  "GO LIVE ON YOUTUBE" button: paste the stream key once (stored on the server
+  with file permissions 0600, never shown or exported again), and the phone
+  composites the scorebug onto its camera and broadcasts 720p30 straight to
+  YouTube through the server. The director panel shows a live health chip
+  (bitrate, uptime, drops). ffmpeg is the **only optional dependency** in the
+  whole app — everything else works without it.
+
+Both roles use the same takeover model: joining with "take over" cleanly
+revokes the old device, which immediately becomes read-only.
 
 Overlay pages accept `?match=<id>`; without it they attach to the server's
 most recently active match and automatically re-attach when a new match starts.

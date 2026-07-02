@@ -246,3 +246,13 @@ body.dark .toast.warn { background: #f0c95c; color: #33270a; }
   font-size: 30px; font-weight: 800; letter-spacing: 0.35em; text-align: center;
   font-variant-numeric: tabular-nums; width: 100%; max-width: 260px;
 }
+
+/* broadcast health chip (Part D) */
+.stream-chip {
+  font-size: 12px; font-weight: 700; white-space: nowrap;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--line); color: var(--fg-soft);
+  font-variant-numeric: tabular-nums;
+}
+.stream-chip.live { background: #b3261e; color: #fff; animation: chip-pulse 1.4s infinite; }
+@keyframes chip-pulse { 50% { opacity: 0.75; } }

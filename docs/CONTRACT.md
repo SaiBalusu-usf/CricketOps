@@ -15,9 +15,11 @@ The engine itself runs in the browser: `import { ... } from '/engine/index.js'`.
 | `/console` · `/console/:matchId` | Scoring console (PWA) |
 | `/overlay/scorebug` `/overlay/batting` `/overlay/bowling` `/overlay/summary` `/overlay/lineups` `/overlay/target` `/overlay/full` | OBS browser sources, 1920×1080 |
 | `/director` · `/director/:matchId` | Director panel |
-| `/live/:matchId` | Public live scorecard |
+| `/live/:matchId` | Public live scorecard (`/live` redirects to `/matches`) |
 | `/matches` | All matches on this server |
 | `/settings` | Branding settings |
+| `/stream` · `/stream/:matchId` | Streamer phone: match camera + program preview + YouTube broadcast |
+| `/stream/program` (`?match=`) | Clean camera feed for OBS (Tier 1 WebRTC consumer) |
 
 Overlay pages take `?match=<id>`; without it they attach to the server's
 **active match** (`GET /api/info → activeMatchId`) and re-attach when a new
@@ -26,45 +28,68 @@ match becomes active. All static assets live under `/client/...`;
 
 ## 2. REST
 
-- `GET /api/info` → `{ port, urls: ["http://192.168.x.x:3333", …], activeMatchId }`
+- `GET /api/info` → `{ port, urls: ["http://192.168.x.x:3333", …], activeMatchId,
+  streaming: { rtmp: bool } }` (`rtmp` = ffmpeg found → phone-only YouTube broadcast available)
 - `GET /api/matches` → `[{ id, phase, teams:[{id,name,short,color}], innings:[{battingTeamId,runs,wickets,overs,superOver}], result, createdAt, updatedAt }]`
 - `POST /api/matches` body `{ config }` (shape: engine `normalizeConfig` input, §5) → `{ id, scorerPin, directorPin, summary }`
 - `GET /api/matches/:id` → `{ matchId, version, state, presentation }`
 - `GET /api/matches/:id/events` → `{ matchId, version, events }` (for the edit log)
 - `GET /api/matches/:id/export` → downloadable match JSON `{ format, id, title, events }`
 - `POST /api/import` body = an export file → `{ id, scorerPin, directorPin, summary }`
-- `GET /api/branding` / `PUT /api/branding` → branding object (§7)
+- `GET /api/branding` / `PUT /api/branding` → branding object (§7).
+  PUT from anywhere but localhost needs an `x-icat-pin` header carrying a scorer
+  or director PIN of a current (non-complete, else any) match; otherwise `401`.
+  Repeated wrong PINs → `429 { error:'locked-out', retryInMs }`.
+- `POST /api/matches` and `POST /api/import` are rate-limited to 5/min per IP (`429`).
+  Squads are capped at 16 players per team at creation.
 - `GET /qr.svg?text=<url>` → QR code SVG
 
 ## 3. Socket protocol (Socket.IO, all messages use ack callbacks)
 
 Client → server:
 
-- `join { matchId?, role: 'view'|'scorer'|'director', pin?, clientId?, takeover? }`
-  → ack `{ ok, role, matchId, version, state, presentation, branding, pins? }`
-  - scorer with wrong PIN → `{ ok:false, error:'bad-pin' }`
-  - another scorer active → `{ ok:false, error:'scorer-active' }`; re-join with
-    `takeover:true` to seize the lock (old scorer gets `scorer-revoked`).
+- `join { matchId?, role: 'view'|'scorer'|'director'|'streamer', pin?, clientId?, takeover? }`
+  → ack `{ ok, role, matchId, version, rev, state, presentation, branding, pins?, streaming }`
+  - scorer authenticates with the scorer PIN; director and **streamer** accept
+    the director *or* scorer PIN (deliberately no third PIN — the streamer is
+    the director-trust tier).
+  - wrong PIN → `{ ok:false, error:'bad-pin' }`. Five consecutive failures per
+    (IP, match) → `{ ok:false, error:'locked-out', retryInMs }` with exponential
+    backoff (30 s doubling, capped at 10 min).
+  - another holder active → `{ ok:false, error:'scorer-active'|'streamer-active' }`;
+    re-join with `takeover:true` to seize the lock (old device gets
+    `scorer-revoked` / `streamer-revoked` **and** its server-side role is
+    downgraded to view — its later actions are rejected with `revoked:true`).
   - `clientId` is a random id kept in localStorage so a page refresh keeps the lock.
-- `append { matchId, event, force? }` → ack `{ ok, version }` |
-  `{ ok:false, errors:[…] }` | `{ ok:false, warnings:[…], needsForce:true }`
-  (re-send with `force:true` after the user confirms). Give each event an
-  `id` (random string) before sending — appends are idempotent by `id`, safe
-  to re-send after a reconnect.
-- `undo { matchId }` → ack `{ ok, undone, version }` (scorer only; removes the
-  **last event** — a wicket + incoming batter is two undos)
-- `edit { matchId, seq, event }` → ack `{ ok, version, anomalies }` (scorer only;
-  `seq` = index in the events array; only sensible for BALL events)
-- `presentation { matchId, patch }` → merged + persisted + broadcast (scorer/director)
+- `append { matchId, event, force?, expectedVersion? }` → ack `{ ok, version }` |
+  `{ ok:false, errors:[…] }` | `{ ok:false, warnings:[…], needsForce:true }` |
+  `{ ok:false, warnings:[…], needsForce:true, versionConflict:true }` when
+  `expectedVersion` (set by the offline queue) no longer matches the log length |
+  `{ ok:false, errors:[…], revoked:true }` when this device lost the scorer lock.
+  Give each event an `id` (random string) — appends are idempotent by `id`.
+  `force:true` overrides both warning types after explicit user confirmation.
+- `undo { matchId }` → ack `{ ok, undone, version }` (lock-holding scorer only)
+- `edit { matchId, seq, event }` → ack `{ ok, version, anomalies }` (lock-holding scorer only)
+- `presentation { matchId, patch }` → merged + persisted + broadcast (scorer/director/streamer)
 - `fire { matchId, fx: {type, …} }` → broadcast a manual stinger (scorer/director)
+- `stream:*` — see §11.
 
 Server → client (broadcast to the match room):
 
-- `state { matchId, version, state }` — after every change. Full snapshot; replace, don't merge.
+- `state { matchId, version, rev, state }` — after every change. Full snapshot;
+  replace, don't merge. `rev` is a **monotonic change counter** (persisted in
+  match meta): unlike `version` it never decreases on undo, so clients drop any
+  broadcast whose `rev` is lower than one they have already applied. (The
+  original B6 idea — guard on `version` — would wedge the UI after an undo,
+  which legitimately lowers `version`; `rev` keeps the ordering guard sound.)
 - `fx { matchId, fx: [FxItem, …], manual? }` — stinger triggers (§6)
 - `presentation { matchId, presentation }`
-- `branding <branding object>`
-- `scorer-revoked { matchId }` — this device lost the scorer lock; go read-only.
+- `branding <branding object>` — deliberately **global** (`io.emit`), not
+  room-scoped: branding is server-wide and overlays for other matches must
+  update too. Do not scope it to a room.
+- `scorer-revoked { matchId }` / `streamer-revoked { matchId }` — this device
+  lost that lock; go read-only. Also re-sent whenever a stale device tries to act.
+- `stream:status` / `stream:publisher-changed` — see §11.
 
 ## 4. `state` shape (produced by `engine reduce()`)
 
@@ -218,8 +243,20 @@ const app = await connect({
 });
 app.send(event, {force}) → Promise<ack>   // queues offline, flushes on reconnect (scorer)
 app.undo() / app.edit(seq, event) / app.setPresentation(patch) / app.fire(fx)
-app.state, app.presentation, app.branding, app.matchId, app.role
+app.state, app.presentation, app.branding, app.matchId, app.role, app.rev
 ```
+
+Offline-queue semantics (A2): every queued item is stamped with
+`baseVersion = version + itemsAheadInQueue` at queue time; `flush()` sends it
+as `expectedVersion`. On a `versionConflict` ack the queue **freezes**
+(`app.queueFrozen`) and `onQueueConflict(items)` fires — the console shows a
+review sheet built on `app.queuedEvents() / app.resendQueued(i) /
+app.discardQueued(i) / app.unfreezeQueue()`. The queue also freezes the moment
+the app is revoked, so stale balls never auto-apply after a later re-takeover.
+Any ack carrying `revoked:true` behaves exactly like the revoke event
+(role→view, `onStatus('revoked')`). Extra callbacks: `onQueueConflict`,
+`onStreamStatus`, `onPublisherChanged`; `onStatus` gets `(status, res)` so
+`locked-out` can show `res.retryInMs` as a countdown.
 
 `fmt`: `overs(balls)`, `figures(bowler)` → "2.3-0-24-1", `srr(x)` 1-dp string,
 `batLine(batter)` → "38(22)". `$`/`h` are querySelector / element helpers.
@@ -256,3 +293,55 @@ stack, `font-variant-numeric: tabular-nums` for all numbers.
 Stinger markup/animation belongs to `stingers.js` (exports
 `mountStingers(container)` returning `{ play(fxItem) }`); `full.html` and
 `scorebug.html` both use it. Card overlays do not play stingers.
+
+## 11. Streaming (Part D — two-phone operation)
+
+Phone 1 scores at `/console`; phone 2 opens `/stream/<matchId>`, joins as the
+**streamer role** (director or scorer PIN — no third PIN exists by design) and
+becomes the match camera. One active streamer per match (`streamerLocks`,
+same takeover semantics as the scorer lock). The streamer surface consumes the
+same `state`/`presentation`/`fx`/`branding` bus as every other surface — there
+is no parallel data path.
+
+**Tier 1 (always available)** — phone camera → laptop OBS over LAN WebRTC:
+
+- `stream:webrtc-request { matchId }` (viewer → server) → relayed to the
+  lock-holding streamer as `{ matchId, from }`; ack `{ ok }` or
+  `{ ok:false, error:'no-streamer' }`.
+- `stream:webrtc-offer { matchId, to, payload }` (streamer → viewer, relayed;
+  only accepted from the lock holder).
+- `stream:webrtc-answer { matchId, payload }` (viewer → streamer, relayed).
+- `stream:ice { matchId, to?, payload }` (both directions; viewer→streamer
+  needs no `to`).
+- `stream:publisher-changed { matchId }` (broadcast) — a new streamer took
+  over; program pages tear down and re-request automatically.
+- `/stream/program` renders the clean camera feed only (OBS composites the
+  overlay separately). Signaling payloads are opaque to the server.
+
+**Tier 2 (when `/api/info → streaming.rtmp` is true)** — phone → YouTube via
+the server's ffmpeg (`FFMPEG_PATH` env or `ffmpeg` on PATH):
+
+- `stream:set-key { matchId, key }` / `stream:clear-key { matchId }`
+  (lock-holding streamer only). The key is **write-only**: stored in
+  `data/matches/<id>/stream.json` (mode 0600), never in `state`, exports,
+  `/api/matches/:id`, status payloads, or logs. Acks/status expose only
+  `{ hasKey, keyTail:'…abcd' }`.
+- `stream:start { matchId, mimeType }` → spawns ffmpeg (H.264 input → copy,
+  else transcode to 720p30 x264 2.5 Mbps, keyframe 2 s) pushing
+  `rtmp://a.rtmp.youtube.com/live2/<key>`. `STREAM_TEST_OUTPUT=null` (env, for
+  tests) pipes into ffmpeg's null muxer instead; ack carries `test:true`.
+- `stream:chunk { matchId, seq, data }` — binary MediaRecorder chunks (1 s),
+  written to ffmpeg stdin in order; the server buffers at most ~12 s and
+  drops oldest beyond that (counted in `drops`).
+- `stream:stop { matchId }`; a dropped streamer socket keeps ffmpeg alive for
+  a 60 s grace window, and a rejoin adopts the session (a resume respawns
+  ffmpeg cleanly rather than splicing mid-GOP).
+- `stream:status { matchId }` ack, plus a 2 s broadcast while a session runs:
+  `{ matchId, rtmp, live, uptimeSec, kbps, queuedSec, drops, ffmpegAlive,
+  hasKey, keyTail, lastError }`. The director panel renders this as a
+  read-only health chip.
+
+The Tier-2 composite is drawn client-side (`client/stream/canvas-scorebug.js`)
+from the same `onState`/`onPresentation` callbacks as the DOM scorebug.
+`presentation.theme:'chroma'` is meaningless on a composited frame and is
+ignored there; `fx` renders as a simple 2 s banner for four/six/wicket.

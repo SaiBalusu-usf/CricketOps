@@ -138,11 +138,23 @@ $('#logoClear').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 
 async function put(body) {
-  const res = await fetch('/api/branding', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  // saving from another device needs a scorer/director PIN (B2);
+  // localhost saves stay frictionless — the server only 401s remote callers
+  const headers = { 'Content-Type': 'application/json' };
+  const saved = sessionStorage.getItem('icat-settings-pin');
+  if (saved) headers['x-icat-pin'] = saved;
+  let res = await fetch('/api/branding', { method: 'PUT', headers, body: JSON.stringify(body) });
+  if (res.status === 401 || res.status === 429) {
+    const ask = res.status === 429
+      ? 'Too many wrong PINs — wait a bit, then enter a scorer or director PIN:'
+      : 'Enter a scorer or director PIN to change branding from this device:';
+    const pin = window.prompt(ask);
+    if (!pin || !pin.trim()) throw new Error('a PIN is needed to save from this device');
+    headers['x-icat-pin'] = pin.trim();
+    res = await fetch('/api/branding', { method: 'PUT', headers, body: JSON.stringify(body) });
+    if (res.ok) sessionStorage.setItem('icat-settings-pin', pin.trim());
+    else if (res.status === 401) sessionStorage.removeItem('icat-settings-pin');
+  }
   if (!res.ok) throw new Error(`save failed (${res.status})`);
   return res.json();
 }

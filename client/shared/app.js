@@ -98,8 +98,10 @@ export async function connect(opts = {}) {
     presentation: null,
     branding: null,
     version: 0,
+    rev: 0,          // monotonic server change counter — ordering guard
     online: false,
     queue: [],
+    queueFrozen: false, // stop auto-flush after a takeover/version conflict
   };
 
   const queueKey = () => `icat-queue-${app.matchId}`;
@@ -117,6 +119,16 @@ export async function connect(opts = {}) {
 
   let joinOpts = { role: opts.role || 'view', pin: opts.pin, takeover: opts.takeover };
 
+  /** An ack carrying revoked:true means another device took this role over. */
+  const noteRevoked = (res) => {
+    if (res && res.revoked) {
+      app.role = 'view';
+      app.queueFrozen = true; // stale queued balls must never auto-apply later
+      cb('onStatus', 'revoked');
+    }
+    return res;
+  };
+
   async function join() {
     if (!app.matchId) {
       const info = await fetchInfo();
@@ -129,16 +141,21 @@ export async function connect(opts = {}) {
     }
     const res = await emitAck('join', { matchId: app.matchId, clientId: cid, ...joinOpts });
     if (!res.ok) {
-      cb('onStatus', res.error || 'join-failed');
+      cb('onStatus', res.error || 'join-failed', res); // res.retryInMs rides along on 'locked-out'
       if (res.error === 'no-match') { app.matchId = null; setTimeout(join, 3000); }
       return;
     }
     app.role = res.role;
-    app.version = res.version;
-    app.state = res.state;
     app.presentation = res.presentation;
     app.branding = res.branding;
     app.pins = res.pins;
+    app.streaming = res.streaming;
+    // a broadcast may have raced ahead of this snapshot — never regress (B6)
+    if (!(res.rev !== undefined && res.rev < app.rev)) {
+      app.version = res.version;
+      app.rev = res.rev || 0;
+      app.state = res.state;
+    }
     app.online = true;
     cb('onStatus', 'online');
     cb('onBranding', app.branding);
@@ -150,13 +167,25 @@ export async function connect(opts = {}) {
 
   let flushing = false;
   async function flush() {
-    if (flushing || !app.online || app.role === 'view' || !app.queue.length) return;
+    if (flushing || !app.online || app.role === 'view' || app.queueFrozen || !app.queue.length) return;
     flushing = true;
     try {
-      while (app.queue.length && app.online) {
+      while (app.queue.length && app.online && !app.queueFrozen) {
         const item = app.queue[0];
-        const res = await emitAck('append', { matchId: app.matchId, event: item.event, force: item.force });
+        // A2: expectedVersion = where the log stood when this ball was queued;
+        // a mismatch means scoring continued elsewhere — stop and let the
+        // scorer review instead of silently corrupting the innings.
+        const res = await emitAck('append', {
+          matchId: app.matchId, event: item.event, force: item.force,
+          expectedVersion: item.baseVersion,
+        });
         if (res.timeout) break; // still offline-ish; retry on next reconnect
+        if (res.revoked) { noteRevoked(res); break; }
+        if (res.versionConflict) {
+          app.queueFrozen = true;
+          cb('onQueueConflict', app.queue.slice());
+          break;
+        }
         app.queue.shift();
         saveQueue();
         if (!res.ok && !res.duplicate) cb('onQueueDrop', item.event, res.errors || res.warnings || []);
@@ -171,6 +200,8 @@ export async function connect(opts = {}) {
   socket.on('disconnect', () => { app.online = false; cb('onStatus', 'offline'); });
   socket.on('state', (msg) => {
     if (msg.matchId !== app.matchId) return;
+    if (msg.rev !== undefined && msg.rev < app.rev) return; // out-of-order broadcast (B6)
+    if (msg.rev !== undefined) app.rev = msg.rev;
     app.state = msg.state;
     app.version = msg.version;
     cb('onState', app.state, app.version);
@@ -185,8 +216,16 @@ export async function connect(opts = {}) {
   socket.on('scorer-revoked', (msg) => {
     if (msg.matchId !== app.matchId) return;
     app.role = 'view';
+    app.queueFrozen = true;
     cb('onStatus', 'revoked');
   });
+  socket.on('streamer-revoked', (msg) => {
+    if (msg.matchId !== app.matchId) return;
+    if (app.role === 'streamer') app.role = 'view';
+    cb('onStatus', 'revoked');
+  });
+  socket.on('stream:status', (msg) => { if (msg.matchId === app.matchId) cb('onStreamStatus', msg); });
+  socket.on('stream:publisher-changed', (msg) => { if (msg.matchId === app.matchId) cb('onPublisherChanged', msg); });
 
   // overlays follow the server's active match: when this one is done,
   // quietly watch for the next one
@@ -201,27 +240,49 @@ export async function connect(opts = {}) {
     }, 10000);
   }
 
+  const enqueue = (ev, force) => {
+    // baseVersion = the log position this ball logically follows: current
+    // version plus the balls already ahead of it in the queue (A2)
+    app.queue.push({ event: ev, force, baseVersion: app.version + app.queue.length });
+    saveQueue();
+    cb('onQueue', app.queue.length);
+    return { ok: true, queued: true };
+  };
+
   /** Append an event. Offline (or timeout): queued + optimistic ack. */
   app.send = async (event, { force = false } = {}) => {
     const ev = { id: rid(), ...event };
-    if (!app.online) {
-      app.queue.push({ event: ev, force });
-      saveQueue();
-      cb('onQueue', app.queue.length);
-      return { ok: true, queued: true };
-    }
+    if (!app.online) return enqueue(ev, force);
     const res = await emitAck('append', { matchId: app.matchId, event: ev, force });
-    if (res.timeout) {
-      app.queue.push({ event: ev, force });
-      saveQueue();
-      cb('onQueue', app.queue.length);
-      return { ok: true, queued: true };
-    }
-    return res;
+    if (res.timeout) return enqueue(ev, force);
+    return noteRevoked(res);
   };
 
-  app.undo = () => emitAck('undo', { matchId: app.matchId });
-  app.edit = (seq, event) => emitAck('edit', { matchId: app.matchId, seq, event });
+  app.undo = () => emitAck('undo', { matchId: app.matchId }).then(noteRevoked);
+  app.edit = (seq, event) => emitAck('edit', { matchId: app.matchId, seq, event }).then(noteRevoked);
+
+  // ---- offline-queue review (A2) — used by the console's conflict sheet ----
+  app.queuedEvents = () => app.queue.slice();
+  /** Re-apply one reviewed ball on top of the current log. */
+  app.resendQueued = async (index) => {
+    const item = app.queue[index];
+    if (!item) return { ok: false, errors: ['no such queued ball'] };
+    const res = await emitAck('append', { matchId: app.matchId, event: item.event, force: true });
+    if (res.ok || res.duplicate) {
+      app.queue.splice(index, 1);
+      saveQueue();
+      cb('onQueue', app.queue.length);
+      if (!app.queue.length) app.queueFrozen = false;
+    }
+    return noteRevoked(res);
+  };
+  app.discardQueued = (index) => {
+    app.queue.splice(index, 1);
+    saveQueue();
+    cb('onQueue', app.queue.length);
+    if (!app.queue.length) app.queueFrozen = false;
+  };
+  app.unfreezeQueue = () => { app.queueFrozen = false; flush(); };
   app.setPresentation = (patch) => emitAck('presentation', { matchId: app.matchId, patch });
   app.fire = (fx) => emitAck('fire', { matchId: app.matchId, fx });
   app.rejoin = (extra = {}) => { joinOpts = { ...joinOpts, ...extra }; return join(); };
