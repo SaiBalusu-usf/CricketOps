@@ -197,7 +197,8 @@ function renderScorecard(st) {
 // Commentary (newest first, incremental prepend)
 // ---------------------------------------------------------------------------
 
-let feedSeq = -1;
+let feedCount = 0;      // rendered entries (the feed array is append-only across pure appends)
+let feedVersion = null; // state version those entries came from
 let feedOverKey = null;
 
 function overNoOf(it) {
@@ -212,21 +213,24 @@ function feedItem(it) {
     h('div', { class: 'fi-text' }, it.text));
 }
 
-function renderFeed(st) {
+function renderFeed(st, version) {
   const box = $('#feed');
   const items = st.feed || [];
-  const newestSeq = items.length ? items[items.length - 1].seq : -1;
-  if (newestSeq < feedSeq) { box.textContent = ''; feedSeq = -1; feedOverKey = null; } // rewound (undo/edit)
+  // Pure append → render just the new tail. Anything else (first paint,
+  // undo, edit-in-place, reconnect) → full rebuild. Entries can carry
+  // seq:null (innings/result lines), so the cursor is an index, not a seq.
+  const incremental = feedVersion !== null && version > feedVersion && items.length >= feedCount;
+  if (!incremental) { box.textContent = ''; feedCount = 0; feedOverKey = null; }
+  feedVersion = version;
 
   if (!items.length) {
-    box.textContent = '';
     box.append(h('p', { class: 'empty' }, 'Ball-by-ball commentary will appear here.'));
     return;
   }
-  if (feedSeq === -1) box.textContent = '';
+  if (feedCount === 0) box.textContent = ''; // drop any placeholder
 
-  for (const it of items) {
-    if (it.seq <= feedSeq) continue;
+  for (let i = feedCount; i < items.length; i++) {
+    const it = items[i];
     const overNo = overNoOf(it);
     if (overNo !== null && ['ball', 'four', 'six', 'wicket', 'extra'].includes(it.kind)) {
       const key = `${it.inning}:${overNo}`;
@@ -236,8 +240,8 @@ function renderFeed(st) {
       }
     }
     box.insertBefore(feedItem(it), box.firstChild);
-    feedSeq = it.seq;
   }
+  feedCount = items.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,10 +385,10 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 connect({
   matchId,
   role: 'view',
-  onState(st) {
+  onState(st, version) {
     renderHeader(st);
     renderScorecard(st);
-    renderFeed(st);
+    renderFeed(st, version);
     renderOvers(st);
     renderInfo(st);
   },

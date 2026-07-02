@@ -84,10 +84,13 @@ Server → client (broadcast to the match room):
   },
   "squads": { "A": [{ "id", "name" }, …], "B": […] },   // config squads + mid-match additions
   "phase": "setup" | "live" | "break" | "complete",
-  "innings": [ /* Innings, in order; index 2..3 = super over */ ],
+  "innings": [ /* Innings, in order; index 2+ = super overs (a tied super over
+                  may be followed by another pair, per ICC) */ ],
   "needs": { "openers": bool, "bowler": bool, "newBatter": bool },
   "freeHitPending": bool,
-  "target": { "runs": 171, "revised": false } /* null before a chase */,
+  "target": { "runs": 171, "revised": false } /* set from the moment the innings that
+       sets it closes — i.e. during the break AND the chase; null before that */,
+  "pendingOversLimit": null /* overs revision made during a break; applies to the next innings */,
   "chase": { "target", "need", "ballsLeft", "rrr" } /* only while a chase is live */,
   "result": { "winner": "A"|"B"|null, "text": "ICAT Blue won by 23 runs", "method": … } /* or null */,
   "superOverAvailable": bool,
@@ -149,6 +152,8 @@ Every event gets `id` (random string) client-side. Server adds `ts`.
   - Dismissal kinds: `bowled caught lbw runout stumped hitwicket timedout obstructing hittwice`.
     Legality rules are enforced by the engine (wide → runout/stumped/hitwicket/obstructing;
     no-ball & free hit → runout/obstructing/hittwice; lbw blocked when noLbw).
+  - Law 16.9: if the ball's completed runs already reach the target, an attached
+    wicket is silently voided (a feed info line records it).
 - `NEW_BATTER { batter, end: 'striker'|'nonstriker' }` — **end = where they stand
   for the NEXT delivery** (the survivor takes the other end). After `caught` with
   `crossed:true`, default the end to `nonstriker` so the survivor keeps strike.

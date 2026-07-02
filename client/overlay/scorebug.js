@@ -274,7 +274,8 @@ export function mountScorebug(stage) {
     let need = '';
     if (state.target) {
       const nxt = teamOf(state, inn.bowlingTeamId) || {};
-      const limit = state.innings.length >= 2 ? 1 : (state.config.oversPerInnings || inn.oversLimit);
+      const limit = state.innings.length >= 2 ? 1
+        : (state.pendingOversLimit || state.config.oversPerInnings || inn.oversLimit);
       need = `${nxt.short || nxt.name || ''} need ${state.target.runs} from ${limit} over${limit === 1 ? '' : 's'}`;
     }
     r.bkNeed.textContent = need;

@@ -523,7 +523,11 @@ export function openAddPlayerSheet(ctx, presetTeam = null) {
     h('button', { class: 'btn primary', onclick: async () => {
       const n = name.value.trim();
       if (!n) { toast('Enter a name', 'warn'); return; }
-      const playerId = `${teamId}${ctx.state.squads[teamId].length + 1}`;
+      // next free id: max numeric suffix + 1 (length+1 can collide after
+      // offline-queued adds or edits removed a player event)
+      const maxN = ctx.state.squads[teamId]
+        .reduce((m, p) => Math.max(m, parseInt(String(p.id).slice(1), 10) || 0), 0);
+      const playerId = `${teamId}${maxN + 1}`;
       const res = await ctx.send({ type: 'PLAYER_ADDED', teamId, playerId, name: n });
       if (res.ok) { toast(`${n} added`); closeSheet(); ctx.watchNeeds(); }
     } }, 'Add player'));

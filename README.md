@@ -66,7 +66,7 @@ visit `/console/m-demo`, `/overlay/full`, or `/live/m-demo`.
 |---|---|
 | `/` | Landing page: new match, resume, links, QR code |
 | `/console` · `/console/<matchId>` | Scoring console (installable as a PWA) |
-| `/overlay/full` | Single OBS source: scorebug + cards + stingers + ticker |
+| `/overlay/full` | Single OBS source: scorebug + stingers + ticker |
 | `/overlay/scorebug` | Just the score bar |
 | `/overlay/batting` `/overlay/bowling` `/overlay/summary` `/overlay/lineups` `/overlay/target` | Individual full-screen cards, if you prefer separate OBS sources |
 | `/director` · `/director/<matchId>` | Director panel |

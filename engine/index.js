@@ -265,6 +265,7 @@ export function reduce(events) {
     needs: { openers: false, bowler: false, newBatter: false },
     freeHitPending: false,
     revisedTarget: null,
+    pendingOversLimit: null, // overs revision made during a break, for the next innings
     pendingPenalties: { A: 0, B: 0 }, // penalties awarded before the team has an innings
     feed: [],
     anomalies: [],
@@ -306,9 +307,11 @@ export function reduce(events) {
 function applyEvent(st, ev, seq, nameOf, curInn, liveInn) {
   switch (ev.type) {
     case 'MATCH_CREATED': {
-      st.config = ev.config;
-      st.squads.A = [...ev.config.teams[0].players];
-      st.squads.B = [...ev.config.teams[1].players];
+      // deep-clone: st.config gets patched by CONFIG_UPDATED and must never
+      // alias the immutable event in the log
+      st.config = JSON.parse(JSON.stringify(ev.config));
+      st.squads.A = [...st.config.teams[0].players];
+      st.squads.B = [...st.config.teams[1].players];
       return;
     }
     case 'CONFIG_UPDATED': {
@@ -348,7 +351,8 @@ function applyEvent(st, ev, seq, nameOf, curInn, liveInn) {
       const maxWickets = superOver
         ? Math.min(2, Math.max(1, squadSize - (lms ? 0 : 1)))
         : Math.max(1, squadSize - (lms ? 0 : 1));
-      const oversLimit = superOver ? 1 : st.config.oversPerInnings;
+      const oversLimit = superOver ? 1 : (st.pendingOversLimit || st.config.oversPerInnings);
+      st.pendingOversLimit = null;
       const inn = newInnings(index, battingTeamId, bowlingTeamId, oversLimit, maxWickets, superOver);
       st.innings.push(inn);
       if (superOver) st.revisedTarget = null; // revisions never apply across to a super over
@@ -375,6 +379,7 @@ function applyEvent(st, ev, seq, nameOf, curInn, liveInn) {
       inn.currentBowlerId = ev.bowler;
       bowlerRow(inn, ev.bowler, nameOf);
       if (!inn.curOver) startOver(inn, ev.bowler);
+      else if (inn.curOver.legal === 0) inn.curOver.bowlers = [ev.bowler]; // re-pick before a ball: not shared
       else if (!inn.curOver.bowlers.includes(ev.bowler)) inn.curOver.bowlers.push(ev.bowler);
       return;
     }
@@ -395,7 +400,10 @@ function applyEvent(st, ev, seq, nameOf, curInn, liveInn) {
       const end = ev.end === 'nonstriker' ? 'nonstriker' : 'striker';
       if (end === 'striker') { inn.striker = ev.batter; inn.nonStriker = survivor; }
       else { inn.nonStriker = ev.batter; inn.striker = survivor; }
-      inn.solo = false;
+      // still solo if there was no survivor (a lone last-man-stands batter
+      // retired hurt and is now resuming alone)
+      inn.solo = !(inn.striker && inn.nonStriker);
+      if (inn.solo && !inn.striker) { inn.striker = inn.nonStriker; inn.nonStriker = null; }
       st.needs.newBatter = false;
       startStand(inn);
       pushFeed(st, seq, inn, `${row.name} comes to the crease`, 'info');
@@ -442,10 +450,17 @@ function applyEvent(st, ev, seq, nameOf, curInn, liveInn) {
     }
     case 'TARGET_REVISED': {
       const inn = liveInn() || curInn();
-      if (ev.oversLimit && inn && !inn.closed) {
-        const already = Math.ceil(inn.legalBalls / 6);
-        inn.oversLimit = Math.max(already, clampInt(ev.oversLimit, 1, 100, inn.oversLimit));
+      if (ev.oversLimit) {
+        if (inn && !inn.closed) {
+          const already = Math.ceil(inn.legalBalls / 6);
+          inn.oversLimit = Math.max(already, clampInt(ev.oversLimit, 1, 100, inn.oversLimit));
+        } else {
+          // revised during the break (the usual rain case): applies to the
+          // innings about to start
+          st.pendingOversLimit = clampInt(ev.oversLimit, 1, 100, null);
+        }
       }
+      if (ev.clear) st.pendingOversLimit = null;
       if (ev.target !== undefined && ev.target !== null) {
         st.revisedTarget = clampInt(ev.target, 1, 10000, null);
       } else if (ev.clear) {
@@ -470,7 +485,7 @@ function applyEvent(st, ev, seq, nameOf, curInn, liveInn) {
 
 /** Current chase target while folding (revisions + live view of earlier innings totals). */
 function currentTarget(st, inn) {
-  if (!inn || inn.index === 0 || inn.index === 2) return null; // not a chase
+  if (!inn || inn.index % 2 === 0) return null; // even innings set the target, odd ones chase
   if (inn.index === 1 && st.revisedTarget) return st.revisedTarget;
   const setBy = st.innings[inn.index - 1];
   return setBy ? setBy.runs + 1 : null;
@@ -558,12 +573,22 @@ function applyBall(st, ev, seq, nameOf, liveInn) {
     if (inn.currentStand) inn.currentStand.balls += 1;
   }
   if (inn.currentStand) inn.currentStand.runs += teamRuns;
-  inn.thisOver.push(ballToken({ ...ev, legality, batRuns, extraRuns }));
+
+  // Law 16.9: once the winning run is completed the match is over — a
+  // dismissal on the same ball (e.g. run out going back for an extra run)
+  // does not count.
+  let wicket = ev.wicket || null;
+  const targetNow = currentTarget(st, inn);
+  if (wicket && targetNow !== null && inn.runs >= targetNow) {
+    wicket = null;
+    pushFeed(st, seq, inn, 'Dismissal not counted — the winning run had already been scored (Law 16.9)', 'info');
+  }
+
+  inn.thisOver.push(ballToken({ ...ev, wicket, legality, batRuns, extraRuns }));
   st.lastBallSeq = seq;
 
   // ---- wicket -----------------------------------------------------------------
   let outRow = null;
-  const wicket = ev.wicket || null;
   if (wicket) {
     const outSlot = wicket.out === 'nonstriker' ? 'nonStriker' : 'striker';
     const outId = inn[outSlot];
@@ -749,7 +774,7 @@ function pushBallFeed(st, seq, inn, ev, ctx) {
   if (ev.short) bits.push('one short');
   parts.push(`${bw.name} to ${striker.name}, ${bits.join(', ')}`);
 
-  const kind = ev.wicket ? 'wicket'
+  const kind = ev.wicket && outRow ? 'wicket'
     : legality !== 'legal' ? 'extra'
     : batRuns === 6 ? 'six'
     : batRuns === 4 ? 'four' : 'ball';
@@ -785,10 +810,10 @@ function finalize(st, nameOf) {
   const n = st.innings.length;
   const last = n ? st.innings[n - 1] : null;
 
-  // phase
+  // phase (odd count + closed = between innings, incl. between super overs)
   if (!n) st.phase = 'setup';
   else if (!last.closed) st.phase = 'live';
-  else if (n === 1 || n === 3) st.phase = 'break';
+  else if (n % 2 === 1) st.phase = 'break';
   else st.phase = 'complete';
 
   // needs
@@ -799,22 +824,25 @@ function finalize(st, nameOf) {
   // chase / target
   st.target = null;
   st.chase = null;
-  if (n >= 2) {
-    const chaseInn = st.innings[n - 1].index % 2 === 1 ? st.innings[n - 1] : null;
-    if (chaseInn) {
-      const target = chaseInn.index === 1 && st.revisedTarget
-        ? st.revisedTarget
-        : st.innings[chaseInn.index - 1].runs + 1;
-      st.target = { runs: target, revised: chaseInn.index === 1 && !!st.revisedTarget };
-      if (!chaseInn.closed) {
-        const need = Math.max(0, target - chaseInn.runs);
-        const ballsLeft = Math.max(0, chaseInn.oversLimit * 6 - chaseInn.legalBalls);
-        st.chase = {
-          target, need, ballsLeft,
-          rrr: ballsLeft > 0 ? Math.round((need / ballsLeft) * 600) / 100 : null,
-        };
-      }
+  if (n >= 2 && st.innings[n - 1].index % 2 === 1) {
+    // a chase innings exists (live or finished)
+    const chaseInn = st.innings[n - 1];
+    const target = chaseInn.index === 1 && st.revisedTarget
+      ? st.revisedTarget
+      : st.innings[chaseInn.index - 1].runs + 1;
+    st.target = { runs: target, revised: chaseInn.index === 1 && !!st.revisedTarget };
+    if (!chaseInn.closed) {
+      const need = Math.max(0, target - chaseInn.runs);
+      const ballsLeft = Math.max(0, chaseInn.oversLimit * 6 - chaseInn.legalBalls);
+      st.chase = {
+        target, need, ballsLeft,
+        rrr: ballsLeft > 0 ? Math.round((need / ballsLeft) * 600) / 100 : null,
+      };
     }
+  } else if (n % 2 === 1 && last.closed) {
+    // between innings: the target the NEXT innings will chase
+    const target = n === 1 && st.revisedTarget ? st.revisedTarget : last.runs + 1;
+    st.target = { runs: target, revised: n === 1 && !!st.revisedTarget };
   }
 
   // result (the feed is fully re-derived on every fold, so appending here is safe)
@@ -831,46 +859,46 @@ function finalize(st, nameOf) {
 function computeResult(st) {
   const main = st.innings.slice(0, 2);
   if (main.length < 2 || !main[0].closed || !main[1].closed) return null;
-  const so = st.innings.slice(2, 4);
 
   const t1 = main[0].battingTeamId, t2 = main[1].battingTeamId;
   const target = st.revisedTarget || main[0].runs + 1;
   const r2 = main[1].runs;
 
-  let base;
   if (r2 >= target) {
     const wktsInHand = main[1].maxWickets - main[1].wickets;
     const ballsLeft = main[1].oversLimit * 6 - main[1].legalBalls;
-    base = {
+    return {
       winner: t2,
+      method: 'runs-or-wickets',
       text: `${teamName(st, t2)} won by ${wktsInHand} wicket${wktsInHand === 1 ? '' : 's'}`
         + (ballsLeft > 0 ? ` with ${ballsLeft} ball${ballsLeft === 1 ? '' : 's'} remaining` : ''),
     };
-  } else if (r2 === target - 1) {
-    base = { winner: null, text: 'Match tied' };
-  } else {
+  }
+  if (r2 < target - 1) {
     const margin = target - 1 - r2;
-    base = { winner: t1, text: `${teamName(st, t1)} won by ${margin} run${margin === 1 ? '' : 's'}` };
+    return { winner: t1, method: 'runs-or-wickets', text: `${teamName(st, t1)} won by ${margin} run${margin === 1 ? '' : 's'}` };
   }
 
-  if (base.winner === null) {
-    // Tie — super over?
-    if (so.length === 2 && so[0].closed && so[1].closed) {
-      const soTarget = so[0].runs + 1;
-      if (so[1].runs >= soTarget) {
-        return { winner: so[1].battingTeamId, method: 'super-over', text: `Match tied — ${teamName(st, so[1].battingTeamId)} won the Super Over` };
-      }
-      if (so[1].runs === soTarget - 1) {
-        st.superOverAvailable = st.config.superOver;
-        return { winner: null, method: 'super-over-tied', text: 'Match tied — Super Over tied' };
-      }
-      return { winner: so[0].battingTeamId, method: 'super-over', text: `Match tied — ${teamName(st, so[0].battingTeamId)} won the Super Over` };
+  // Tied — walk super-over pairs (2,3), (4,5), … ICC rules allow repeating
+  // the super over until there is a winner.
+  for (let i = 2; ; i += 2) {
+    const a = st.innings[i], b = st.innings[i + 1];
+    if (!a) {
+      st.superOverAvailable = st.config.superOver;
+      return i === 2
+        ? { winner: null, method: 'tie', text: 'Match tied' }
+        : { winner: null, method: 'super-over-tied', text: 'Match tied — Super Over tied' };
     }
-    if (so.length > 0) return null; // super over in progress
-    st.superOverAvailable = st.config.superOver;
-    return { winner: null, method: 'tie', text: 'Match tied' };
+    if (!a.closed || !b || !b.closed) return null; // super over in progress
+    const t = a.runs + 1;
+    if (b.runs >= t) {
+      return { winner: b.battingTeamId, method: 'super-over', text: `Match tied — ${teamName(st, b.battingTeamId)} won the Super Over` };
+    }
+    if (b.runs < t - 1) {
+      return { winner: a.battingTeamId, method: 'super-over', text: `Match tied — ${teamName(st, a.battingTeamId)} won the Super Over` };
+    }
+    // super over tied as well — another pair may follow
   }
-  return { ...base, method: 'runs-or-wickets' };
 }
 
 // ---------------------------------------------------------------------------
@@ -896,10 +924,11 @@ export function validateAppend(state, ev) {
       if (!st.config) { err('no match'); break; }
       if (live) err('an innings is already in progress');
       const index = st.innings.length;
-      if (index >= 4) err('no more innings available');
-      if (index === 2 || index === 3) {
+      if (index >= 2) {
         if (!st.config.superOver) err('super over is not enabled for this match');
-        else if (index === 2 && !(st.result && st.result.winner === null)) err('super over only follows a tie');
+        else if (index % 2 === 0 && !(st.result && st.result.winner === null)) {
+          err('a super over only follows a tie');
+        }
       }
       if (index === 1 && st.innings[0] && ev.battingTeamId === st.innings[0].battingTeamId) {
         err('this team already batted');
@@ -997,9 +1026,14 @@ export function validateAppend(state, ev) {
       if (!live) err('no innings in progress');
       break;
 
-    case 'PLAYER_ADDED':
+    case 'PLAYER_ADDED': {
       if (!ev.name || !ev.name.trim()) err('player name required');
+      const t = ev.teamId === 'B' ? 'B' : 'A';
+      if (ev.playerId && st.squads[t].some((p) => p.id === ev.playerId)) {
+        err(`player id ${ev.playerId} already exists`);
+      }
       break;
+    }
 
     case 'CONFIG_UPDATED':
       break;
@@ -1090,6 +1124,19 @@ export function computeFx(before, after, ev) {
         tokens: innA.lastOver,
         bowler: bw ? `${bw.name} ${bw.oversText}-${bw.maidens}-${bw.runs}-${bw.wickets}` : '',
         score: `${innA.runs}/${innA.wickets}`,
+      });
+    }
+  }
+
+  // retired out is a wicket the overlays should announce too
+  if (ev.type === 'RETIREMENT' && ev.kind === 'out') {
+    const innA = after.innings[after.innings.length - 1];
+    const fowEntry = innA && innA.fow[innA.fow.length - 1];
+    const outRow = fowEntry ? innA.batters.find((b) => b.id === fowEntry.batterId) : null;
+    if (outRow) {
+      fx.push({
+        type: 'wicket', batter: outRow.name, score: `${outRow.runs}(${outRow.balls})`,
+        how: 'retired out', teamScore: `${innA.runs}/${innA.wickets}`,
       });
     }
   }

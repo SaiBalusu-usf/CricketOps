@@ -299,10 +299,12 @@ async function startMatch(matchId) {
     const b = inn.bowlers.find((x) => x.id === inn.currentBowlerId);
     const tokens = inn.thisOver.length ? inn.thisOver : inn.lastOver;
     const label = inn.thisOver.length ? 'This over' : 'Last over';
+    const rules = (state && state.config && state.config.rules) || { wideRuns: 1, noBallRuns: 1 };
     const runs = tokens.reduce((s, t) => {
-      const m = t.match(/\d+/); // token totals are close enough for the strip sum
+      const m = t.match(/\d+/); // runs shown inside the token (wd+2, nb+4, b2, plain digits)
       return s + (t === '4' || t === '6' ? parseInt(t, 10) : m ? parseInt(m[0], 10) : 0)
-        + ((t === 'wd' || t === 'nb' || t.indexOf('wd+') === 0 || t.indexOf('nb+') === 0) ? 1 : 0);
+        + ((t === 'wd' || t.indexOf('wd+') === 0) ? rules.wideRuns : 0)
+        + ((t === 'nb' || t.indexOf('nb+') === 0) ? rules.noBallRuns : 0);
     }, 0);
     return h('div', { class: 'card' },
       h('div', { class: 'card-title' }, 'Bowling'),
