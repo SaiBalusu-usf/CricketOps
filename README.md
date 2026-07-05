@@ -154,6 +154,10 @@ Community matches happen on flaky hotspots. Accordingly:
 
 ## Letting people watch from anywhere (free)
 
+> The full hosting guide — match-day tunnel, permanent self-host on a Pi/old
+> laptop with systemd, and always-free cloud VMs — is in **[HOSTING.md](HOSTING.md)**.
+
+
 Local is the primary mode: OBS, scorer, and director all talk to the laptop.
 But if family across town wants the `/live` page, or your scorer is at the
 boundary on mobile data, put a free tunnel in front — no account, no key:

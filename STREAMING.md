@@ -24,6 +24,11 @@ requirements you may have heard about apply to streaming from the YouTube
 
 ## Option B — stream from a phone, no laptop at the ground
 
+> **HTTPS note:** phone browsers only unlock the camera on `https://` pages
+> (or localhost). On plain LAN HTTP the `/stream` page cannot open the camera —
+> run the free quick tunnel from [HOSTING.md](HOSTING.md) Tier 1 and open the
+> `https://…trycloudflare.com/stream/<matchId>` URL on the phone instead.
+
 If the machine running the server has **ffmpeg** installed (`ffmpeg` on PATH,
 or set `FFMPEG_PATH=`), you can skip OBS entirely:
 
