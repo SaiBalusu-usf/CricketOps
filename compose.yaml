@@ -1,0 +1,10 @@
+# docker compose up -d   →  http://localhost:3333
+services:
+  cricketops:
+    build: .
+    ports:
+      - "3333:3333"
+    volumes:
+      - ./data:/app/data          # match history survives rebuilds/updates
+      - ./config:/app/config      # branding
+    restart: unless-stopped       # auto-restart on crash and on reboot
