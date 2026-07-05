@@ -745,13 +745,23 @@ io.on('connection', (socket) => {
 // ---------------------------------------------------------------------------
 
 function lanUrls() {
-  const urls = [];
-  for (const [, addrs] of Object.entries(os.networkInterfaces())) {
+  // Wi-Fi adapters first: VPN/virtual adapters (Tailscale, WSL, corporate
+  // VPNs) often win enumeration order but are unreachable from phones, and
+  // the first URL feeds the QR codes.
+  const found = [];
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
     for (const a of addrs || []) {
-      if (a.family === 'IPv4' && !a.internal) urls.push(`http://${a.address}:${PORT}`);
+      if (a.family === 'IPv4' && !a.internal) found.push({ name, address: a.address });
     }
   }
-  return urls;
+  const rank = ({ name, address }) => {
+    if (/wi-?fi|wlan|wireless/i.test(name)) return 0;
+    if (address.startsWith('192.168.')) return 1;   // typical home/hotspot subnet
+    if (/^eth|ethernet|^en/i.test(name)) return 2;
+    return 3;                                        // VPNs, tunnels, vEthernet…
+  };
+  found.sort((x, y) => rank(x) - rank(y));
+  return found.map((f) => `http://${f.address}:${PORT}`);
 }
 
 server.on('error', (err) => {
