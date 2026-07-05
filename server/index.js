@@ -211,7 +211,14 @@ app.post('/api/matches', (req, res) => {
 app.get('/api/matches/:id', (req, res) => {
   const m = loadMatch(req.params.id);
   if (!m) return res.status(404).json({ error: 'no such match' });
-  res.json({ matchId: m.meta.id, version: m.events.length, state: m.state, presentation: m.presentation });
+  res.json({
+    matchId: m.meta.id,
+    version: m.events.length,
+    createdAt: m.meta.createdAt,
+    updatedAt: m.meta.updatedAt || m.meta.createdAt,
+    state: m.state,
+    presentation: m.presentation,
+  });
 });
 
 app.get('/api/matches/:id/events', (req, res) => {
@@ -426,6 +433,12 @@ function touch(m) {
   refreshActiveMatch();
 }
 
+/** Live audience counter for the public page (room size, all roles). */
+function broadcastViewers(id) {
+  const n = io.sockets.adapter.rooms.get(room(id))?.size || 0;
+  io.to(room(id)).emit('viewers', { matchId: id, count: n });
+}
+
 io.on('connection', (socket) => {
   socket.data.roles = new Map(); // matchId -> 'view' | 'scorer' | 'director'
 
@@ -463,6 +476,7 @@ io.on('connection', (socket) => {
 
     socket.join(room(id));
     socket.data.roles.set(id, role);
+    queueMicrotask(() => broadcastViewers(id)); // after the join completes
     ack({
       ok: true,
       role,
@@ -720,6 +734,9 @@ io.on('connection', (socket) => {
     scorerLocks.dropSocket(socket.id);
     streamerLocks.dropSocket(socket.id);
     streamManager.onPublisherDisconnect(socket.id);
+    for (const matchId of socket.data.roles.keys()) {
+      queueMicrotask(() => broadcastViewers(matchId));
+    }
   });
 });
 

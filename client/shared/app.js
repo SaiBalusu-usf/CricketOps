@@ -226,6 +226,7 @@ export async function connect(opts = {}) {
   });
   socket.on('stream:status', (msg) => { if (msg.matchId === app.matchId) cb('onStreamStatus', msg); });
   socket.on('stream:publisher-changed', (msg) => { if (msg.matchId === app.matchId) cb('onPublisherChanged', msg); });
+  socket.on('viewers', (msg) => { if (msg.matchId === app.matchId) cb('onViewers', msg.count); });
 
   // overlays follow the server's active match: when this one is done,
   // quietly watch for the next one

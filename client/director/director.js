@@ -440,6 +440,19 @@ async function startDirector(matchId) {
         h('button', { class: 'btn', onclick: () => setTicker('') }, 'Clear')),
       h('div', { class: 'chip-row' }, refs.chips)));
 
+    // YouTube link — embedded on the public /live page's video card
+    refs.videoUrl = h('input', { type: 'url', placeholder: 'https://youtube.com/watch?v=… or youtu.be/…', autocomplete: 'off' });
+    const setVideo = async (url) => {
+      const r = await app.setPresentation({ videoUrl: url });
+      toast(r.ok ? (url ? 'Stream link set — live page shows the video' : 'Stream link cleared') : 'Could not save', r.ok ? 'ok' : 'warn');
+    };
+    colA.append(section('YouTube stream link',
+      h('div', { class: 'ticker-row' },
+        refs.videoUrl,
+        h('button', { class: 'btn primary', onclick: () => setVideo(refs.videoUrl.value.trim()) }, 'Set'),
+        h('button', { class: 'btn', onclick: () => { refs.videoUrl.value = ''; setVideo(''); } }, 'Clear')),
+      h('p', { class: 'sec-note' }, 'Spectators get the live video embedded at the top of the public scorecard.')));
+
     // stingers
     const sg = h('div', { class: 'sting-grid' });
     for (const item of STINGERS) {
@@ -580,6 +593,7 @@ async function startDirector(matchId) {
     const theme = pres.theme === 'chroma' ? 'chroma' : 'broadcast';
     for (const [v, btn] of Object.entries(refs.themeBtns)) btn.classList.toggle('on', theme === v);
     if (document.activeElement !== refs.ticker) refs.ticker.value = pres.ticker || '';
+    if (refs.videoUrl && document.activeElement !== refs.videoUrl) refs.videoUrl.value = pres.videoUrl || '';
     for (const c of refs.chips) c.classList.toggle('on', (pres.ticker || '') === c.dataset.text);
   }
 

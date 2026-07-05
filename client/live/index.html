@@ -2,48 +2,76 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Live — ICAT Cricket Live</title>
-  <meta name="theme-color" content="#0d1117">
-  <link rel="icon" href="/client/icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/client/icons/icon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>Live scorecard — ICAT Cricket Live</title>
+  <link rel="icon" href="/client/icons/icon.svg">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/client/shared/base.css">
   <link rel="stylesheet" href="/client/live/live.css">
 </head>
-<body class="dark">
-  <header id="hdr">
-    <div class="wrap">
-      <div class="hdr-top">
-        <div id="matchTitle" class="match-title muted small">&nbsp;</div>
-        <span id="statusPill" class="pill">&nbsp;</span>
-        <button id="shareBtn" class="icon-btn" type="button" aria-label="Share">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.5l6.8-4M8.6 13.5l6.8 4"/></svg>
-        </button>
-        <button id="qrBtn" class="icon-btn" type="button" aria-label="QR code">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h.01M20 17v.01M20 20v.01"/></svg>
-        </button>
-      </div>
-      <div id="teams"></div>
-      <div id="chase" class="chase" hidden></div>
-    </div>
-    <nav id="tabs" class="wrap" aria-label="Sections">
-      <button class="tab" data-tab="scorecard" type="button">Scorecard</button>
-      <button class="tab" data-tab="commentary" type="button">Commentary</button>
-      <button class="tab" data-tab="overs" type="button">Overs</button>
-      <button class="tab" data-tab="info" type="button">Info</button>
+<body class="livepage">
+  <header id="brandbar">
+    <a class="bb-brand" href="/">
+      <img id="bbLogo" alt="" hidden>
+      <span id="bbName">ICAT</span>
+      <span class="bb-sub">Your cricket, live</span>
+    </a>
+    <nav class="bb-nav">
+      <a href="/matches">Live matches</a>
+      <a href="/" class="bb-cta">Score a match</a>
     </nav>
   </header>
 
-  <main class="wrap">
-    <section id="sec-scorecard" data-sec="scorecard"></section>
-    <section id="sec-commentary" data-sec="commentary"><div id="feed"></div></section>
-    <section id="sec-overs" data-sec="overs"></section>
-    <section id="sec-info" data-sec="info"></section>
-    <p id="offline" class="muted small offline-note" hidden>Reconnecting — scores will catch up automatically.</p>
-  </main>
+  <div id="offline" class="offline-strip" hidden>Reconnecting…</div>
 
-  <div id="modal"></div>
+  <div id="layout">
+    <main id="colMain">
+      <section id="matchCard" class="card mcard">
+        <div class="mc-top">
+          <span id="matchLabel" class="mc-label">Match</span>
+          <span class="mc-actions">
+            <span id="livePill" class="live-pill" hidden><span class="dot"></span>Live</span>
+            <button id="shareBtn" class="icon-round" title="Share" aria-label="Share">&#8599;</button>
+            <button id="qrBtn" class="icon-round" title="QR code" aria-label="QR code">&#9638;</button>
+          </span>
+        </div>
+        <div id="mcMeta" class="mc-meta"></div>
+        <div id="mcToss" class="mc-toss"></div>
+        <div id="teamRows" class="team-rows"></div>
+        <a id="mWatch" class="m-watch" href="#videoCard" hidden>&#9654; Watch the live stream</a>
+      </section>
+
+      <nav id="tabs" class="tabs">
+        <button data-tab="live" class="on">Live</button>
+        <button data-tab="scorecard">Scorecard</button>
+        <button data-tab="commentary">Commentary</button>
+        <button data-tab="overs">Analysis</button>
+        <button data-tab="teams">Teams</button>
+      </nav>
+
+      <section id="tab-live" class="tabpanel card"></section>
+      <section id="tab-scorecard" class="tabpanel card" hidden></section>
+      <section id="tab-commentary" class="tabpanel card" hidden></section>
+      <section id="tab-overs" class="tabpanel card" hidden></section>
+      <section id="tab-teams" class="tabpanel card" hidden></section>
+    </main>
+
+    <aside id="colSide">
+      <section id="videoCard" class="card side-card"></section>
+      <section id="rrCard" class="card side-card"></section>
+      <section id="detailsCard" class="card side-card"></section>
+    </aside>
+  </div>
+
+  <div id="qrModal" class="qr-modal" hidden>
+    <div class="qr-box">
+      <img id="qrImg" alt="QR code for this page">
+      <p class="small muted">Scan to open this live scorecard</p>
+      <button id="qrClose" class="btn primary">Close</button>
+    </div>
+  </div>
+
   <div id="toasts" aria-live="polite"></div>
   <script type="module" src="/client/live/live.js"></script>
 </body>

@@ -1,406 +1,480 @@
-/* Public live scorecard — /live/:matchId. View role, real-time via shared runtime. */
+/**
+ * Public live scorecard — CricHeroes-style layout wired to the state bus.
+ * Everything renders from `state` via the shared runtime; the only fetches
+ * are the one-time match meta (dates) and the event log for the
+ * end-of-over commentary blocks (re-derived with the engine in-browser).
+ */
+import { connect, h, $, $$, fmt, teamOf } from '/client/shared/app.js';
+import { reduce } from '/engine/index.js';
 
-import { connect, fmt, $, $$, h, teamOf } from '/client/shared/app.js';
+const matchId = location.pathname.split('/').filter(Boolean)[1] || null;
 
-const matchId = decodeURIComponent(location.pathname.split('/')[2] || '') || null;
+let app = null;
+let state = null;
+let pres = null;
+let meta = { createdAt: null };
+let lastUpdated = null;
+let viewers = 0;
+let activeTab = 'live';
+let showAllOvers = false;
+const evCache = { version: -1, snaps: null };
 
-const SVG = 'http://www.w3.org/2000/svg';
-function s(tag, attrs = {}, ...kids) {
-  const el = document.createElementNS(SVG, tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  for (const c of kids.flat(Infinity)) {
-    if (c === null || c === undefined || c === false) continue;
-    el.append(c.nodeType ? c : document.createTextNode(String(c)));
-  }
-  return el;
-}
-
-// "20.0" → "20" for compact score lines
-const ovShort = (t) => String(t || '0.0').replace(/\.0$/, '');
-const ordinal = (n) => `${n}${['th', 'st', 'nd', 'rd'][n % 10 > 3 || (n % 100 >= 11 && n % 100 <= 13) ? 0 : n % 10]}`;
+// ---------------------------------------------------------------------------
+// small utils
+// ---------------------------------------------------------------------------
 
 function toast(msg) {
   const el = h('div', { class: 'toast' }, msg);
-  $('#toasts').append(el);
+  document.body.append(el);
   requestAnimationFrame(() => el.classList.add('show'));
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 2200);
 }
 
-function copyText(text) {
+async function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
   const ta = h('textarea', { style: { position: 'fixed', opacity: '0' } }, text);
   document.body.append(ta);
   ta.select();
   try { document.execCommand('copy'); } catch { /* best effort */ }
   ta.remove();
-  return Promise.resolve();
 }
 
-// ---------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------
+const scoreText = (inn) => `${inn.runs}/${inn.wickets}`;
+const dateText = (ts) => (ts ? new Date(ts).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) : '');
+const timeText = (ts) => (ts ? new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '');
 
-function setTab(name, push) {
-  for (const b of $$('.tab')) b.classList.toggle('active', b.dataset.tab === name);
-  for (const sec of $$('main section')) sec.hidden = sec.dataset.sec !== name;
-  if (push) {
-    history.replaceState(null, '', `#${name}`);
-    window.scrollTo(0, 0);
-  }
-}
-for (const b of $$('.tab')) b.addEventListener('click', () => setTab(b.dataset.tab, true));
-setTab(['scorecard', 'commentary', 'overs', 'info'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'scorecard');
-
-// ---------------------------------------------------------------------------
-// Header
-// ---------------------------------------------------------------------------
-
-function renderHeader(st) {
-  const [A, B] = st.config.teams;
-  $('#matchTitle').textContent = st.config.name || `${A.name} vs ${B.name}`;
-
-  const pill = $('#statusPill');
-  pill.className = 'pill';
-  if (st.phase === 'live') { pill.classList.add('live'); pill.textContent = 'LIVE'; }
-  else if (st.phase === 'break') pill.textContent = 'INNINGS BREAK';
-  else if (st.phase === 'complete') { pill.classList.add('final'); pill.textContent = 'FINAL'; }
-  else pill.textContent = 'STARTING SOON';
-
-  const teamsEl = $('#teams');
-  teamsEl.textContent = '';
-  for (const t of st.config.teams) {
-    const reg = st.innings.find((i) => !i.superOver && i.battingTeamId === t.id);
-    const so = st.innings.find((i) => i.superOver && i.battingTeamId === t.id);
-    const score = reg
-      ? h('span', { class: 'tscore' }, `${reg.runs}/${reg.wickets}`,
-          h('small', {}, ` (${ovShort(reg.oversText)})`),
-          so && h('span', { class: 'so' }, `SO ${so.runs}/${so.wickets}`))
-      : h('span', { class: 'tscore' }, h('small', {}, 'yet to bat'));
-    const live = st.phase === 'live' && st.battingTeamId === t.id;
-    teamsEl.append(h('div', { class: `team-line${live ? ' batting' : ''}${reg && !live ? ' quiet' : ''}` },
-      h('span', { class: 'tchip', style: { background: t.color } }),
-      h('span', { class: 'tshort' }, t.short),
-      h('span', { class: 'tname' }, t.name),
-      score));
-  }
-
-  const chase = $('#chase');
-  chase.classList.remove('result');
-  if (st.result) {
-    chase.hidden = false;
-    chase.classList.add('result');
-    chase.textContent = st.result.text;
-  } else if (st.chase) {
-    const rrr = typeof st.chase.rrr === 'number' ? ` · RRR ${st.chase.rrr.toFixed(2)}` : '';
-    chase.hidden = false;
-    chase.textContent = `Need ${st.chase.need} off ${st.chase.ballsLeft}${rrr}`;
-  } else if (st.target && st.phase !== 'complete') {
-    chase.hidden = false;
-    chase.textContent = `Target ${st.target.runs}${st.target.revised ? ' (revised)' : ''}`;
-  } else {
-    chase.hidden = true;
-  }
-
-  const bits = st.config.teams.map((t) => {
-    const reg = st.innings.find((i) => !i.superOver && i.battingTeamId === t.id);
-    return reg ? `${t.short} ${reg.runs}/${reg.wickets}` : t.short;
-  });
-  document.title = `${bits.join(' v ')} — ICAT Cricket Live`;
+function youTubeEmbed(url) {
+  const m = String(url || '').match(/(?:youtu\.be\/|[?&]v=|\/embed\/|\/live\/)([\w-]{6,})/);
+  return m ? `https://www.youtube.com/embed/${m[1]}` : null;
 }
 
-// ---------------------------------------------------------------------------
-// Scorecard
-// ---------------------------------------------------------------------------
-
-const openState = {}; // innings index → user's open/closed choice
-
-function extrasText(x) {
-  const parts = [];
-  if (x.byes) parts.push(`b ${x.byes}`);
-  if (x.legbyes) parts.push(`lb ${x.legbyes}`);
-  if (x.wides) parts.push(`w ${x.wides}`);
-  if (x.noballs) parts.push(`nb ${x.noballs}`);
-  if (x.penalties) parts.push(`pen ${x.penalties}`);
-  return `${x.total}${parts.length ? ` (${parts.join(', ')})` : ''}`;
+/** token → recent-ball bubble */
+function bubble(tok) {
+  if (tok.indexOf('W') >= 0) return h('span', { class: 'bub bw' }, 'W');
+  if (tok === '4') return h('span', { class: 'bub b4' }, '4');
+  if (tok === '6') return h('span', { class: 'bub b6' }, '6');
+  if (tok === '•') return h('span', { class: 'bub' }, '0');
+  if (/^\d+$/.test(tok)) return h('span', { class: 'bub' }, tok);
+  return h('span', { class: 'bub bx' }, tok);
 }
 
-function battingTable(st, inn) {
-  const rows = inn.batters.map((b) => h('tr', { class: b.atCrease ? 'crease' : '' },
-    h('td', {},
-      h('span', { class: 'bname' }, b.name, b.id === inn.striker ? h('span', { class: 'star' }, ' *') : null),
-      h('span', { class: 'howout' }, b.howOut || (b.atCrease ? 'not out' : ''))),
-    h('td', { class: 'r-runs' }, b.runs),
-    h('td', {}, b.balls),
-    h('td', {}, b.fours),
-    h('td', {}, b.sixes),
-    h('td', {}, fmt.num1(b.sr))));
-  return h('table', { class: 'sc' },
-    h('colgroup', {}, h('col', { class: 'c-name' }), h('col'), h('col'), h('col'), h('col'), h('col')),
-    h('thead', {}, h('tr', {}, h('th', {}, 'Batter'), h('th', {}, 'R'), h('th', {}, 'B'), h('th', {}, '4s'), h('th', {}, '6s'), h('th', {}, 'SR'))),
-    h('tbody', {}, rows));
+function feedBubble(it) {
+  if (it.kind === 'four') return bubble('4');
+  if (it.kind === 'six') return bubble('6');
+  if (it.kind === 'wicket') return bubble('W');
+  const t = it.text || '';
+  if (/wide/i.test(t)) return bubble('wd');
+  if (/NO BALL/i.test(t)) return bubble('nb');
+  if (/leg bye/i.test(t)) { const m = t.match(/(\d) leg bye/); return bubble(`${m ? m[1] : ''}lb`); }
+  if (/bye/i.test(t)) { const m = t.match(/(\d) bye/); return bubble(`${m ? m[1] : ''}b`); }
+  if (/no run|dot ball|defended/i.test(t)) return bubble('0');
+  if (/single/i.test(t)) return bubble('1');
+  const m = t.match(/(\d) runs/);
+  return bubble(m ? m[1] : '0');
 }
-
-function bowlingTable(inn) {
-  const rows = inn.bowlers.map((b) => h('tr', { class: b.id === inn.currentBowlerId && !inn.closed ? 'crease' : '' },
-    h('td', {}, h('span', { class: 'bname' }, b.name)),
-    h('td', {}, b.oversText),
-    h('td', {}, b.maidens),
-    h('td', {}, b.runs),
-    h('td', { class: 'r-runs' }, b.wickets),
-    h('td', {}, fmt.num1(b.econ))));
-  return h('table', { class: 'sc' },
-    h('colgroup', {}, h('col', { class: 'c-name' }), h('col'), h('col'), h('col'), h('col'), h('col')),
-    h('thead', {}, h('tr', {}, h('th', {}, 'Bowler'), h('th', {}, 'O'), h('th', {}, 'M'), h('th', {}, 'R'), h('th', {}, 'W'), h('th', {}, 'Econ'))),
-    h('tbody', {}, rows));
-}
-
-function renderScorecard(st) {
-  const sec = $('#sec-scorecard');
-  sec.textContent = '';
-  if (!st.innings.length) {
-    sec.append(h('p', { class: 'empty' }, 'The match has not started yet.'));
-    return;
-  }
-  const list = [...st.innings].reverse(); // latest innings first
-  for (const inn of list) {
-    const team = teamOf(st, inn.battingTeamId);
-    const batted = new Set(inn.batters.map((b) => b.id));
-    const dnb = (st.squads[inn.battingTeamId] || []).filter((p) => !batted.has(p.id));
-    const open = openState[inn.index] !== undefined ? openState[inn.index] : inn.index === st.innings.length - 1;
-
-    const det = h('details', { class: 'inn card', open },
-      h('summary', {},
-        h('span', { class: 'tchip', style: { background: team.color } }),
-        h('span', { class: 'iname' }, team.name,
-          h('span', { class: 'sub' }, inn.superOver ? 'Super over' : `${ordinal(inn.index + 1)} innings`)),
-        h('span', { class: 'iscore' }, `${inn.runs}/${inn.wickets} `, h('small', {}, `(${inn.oversText})`)),
-        h('span', { class: 'caret' }, '▾')),
-      h('div', { class: 'inn-body' },
-        battingTable(st, inn),
-        h('div', { class: 'sc-line' }, h('span', { class: 'lbl' }, 'Extras'), h('span', { class: 'val' }, extrasText(inn.extras))),
-        h('div', { class: 'sc-line total' }, h('span', { class: 'lbl' }, 'Total'),
-          h('span', { class: 'val' }, `${inn.runs}/${inn.wickets} (${inn.oversText} ov${inn.crr !== null && inn.crr !== undefined ? `, CRR ${fmt.num1(inn.crr)}` : ''})`)),
-        dnb.length ? h('div', { class: 'sc-line dnb' },
-          h('span', { class: 'lbl' }, inn.closed ? 'Did not bat' : 'Yet to bat'),
-          h('span', { class: 'val' }, dnb.map((p) => p.name).join(', '))) : null,
-        inn.fow.length ? h('div', { class: 'sc-line fow' },
-          h('span', { class: 'lbl' }, 'FOW'),
-          h('span', { class: 'val' }, inn.fow.map((f) => `${f.wicket}-${f.runs} ${f.batterName} (${f.overs})`).join('  ·  '))) : null,
-        h('div', { class: 'sc-sub' }, 'Bowling'),
-        bowlingTable(inn)));
-    det.addEventListener('toggle', () => { openState[inn.index] = det.open; });
-    sec.append(det);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Commentary (newest first, incremental prepend)
-// ---------------------------------------------------------------------------
-
-let feedCount = 0;      // rendered entries (the feed array is append-only across pure appends)
-let feedVersion = null; // state version those entries came from
-let feedOverKey = null;
 
 function overNoOf(it) {
   if (!it.ov) return null;
   const [o, b] = String(it.ov).split('.').map(Number);
-  return b === 0 ? o : o + 1; // "7.1" is the 8th over
+  return b === 0 ? o : o + 1;
 }
 
-function feedItem(it) {
-  return h('div', { class: `fi kind-${it.kind}` },
-    h('div', { class: 'fi-ov' }, it.ov || ''),
-    h('div', { class: 'fi-text' }, it.text));
-}
+const focus = () => (state && state.innings.length ? state.innings[state.innings.length - 1] : null);
 
-function renderFeed(st, version) {
-  const box = $('#feed');
-  const items = st.feed || [];
-  // Pure append → render just the new tail. Anything else (first paint,
-  // undo, edit-in-place, reconnect) → full rebuild. Entries can carry
-  // seq:null (innings/result lines), so the cursor is an index, not a seq.
-  const incremental = feedVersion !== null && version > feedVersion && items.length >= feedCount;
-  if (!incremental) { box.textContent = ''; feedCount = 0; feedOverKey = null; }
-  feedVersion = version;
+// ---------------------------------------------------------------------------
+// match card
+// ---------------------------------------------------------------------------
 
-  if (!items.length) {
-    box.append(h('p', { class: 'empty' }, 'Ball-by-ball commentary will appear here.'));
-    return;
+function renderMatchCard() {
+  const cfg = state.config;
+  $('#matchLabel').textContent = cfg.name || `${cfg.teams[0].name} v ${cfg.teams[1].name}`;
+  $('#livePill').hidden = !(state.phase === 'live' || state.phase === 'break');
+
+  $('#mcMeta').textContent = '';
+  $('#mcMeta').append(
+    cfg.venue ? h('span', {}, `${cfg.venue}, `) : '',
+    h('b', {}, 'Limited Overs, '), h('b', {}, `${cfg.oversPerInnings} Ov.`),
+    meta.createdAt ? `, ${dateText(meta.createdAt)} ${timeText(meta.createdAt)}` : '');
+
+  const toss = cfg.toss;
+  $('#mcToss').textContent = toss
+    ? `Toss: ${teamOf(state, toss.winner).name} opt to ${toss.decision === 'bat' ? 'bat' : 'field'}`
+    : '';
+
+  const rows = $('#teamRows');
+  rows.textContent = '';
+  const order = state.innings.length
+    ? [state.innings[0].battingTeamId, state.innings[0].bowlingTeamId]
+    : [cfg.teams[0].id, cfg.teams[1].id];
+  for (const tid of order) {
+    const team = teamOf(state, tid);
+    const inns = state.innings.filter((i) => i.battingTeamId === tid && !i.superOver);
+    const right = inns.length
+      ? h('span', { class: 'tscore' }, inns.map((i) => scoreText(i)).join(' & '), ' ',
+        h('small', {}, `(${inns[inns.length - 1].oversText} Ov)`))
+      : h('span', { class: 'tstatus' }, state.phase === 'setup' ? '—' : 'Yet to Bat');
+    rows.append(h('div', { class: 'trow' },
+      h('span', { class: 'tname' }, h('span', { class: 'tchip', style: { background: team.color } }), team.name.toUpperCase()),
+      right));
   }
-  if (feedCount === 0) box.textContent = ''; // drop any placeholder
+  if (state.result) rows.append(h('div', { class: 'result-line' }, state.result.text));
+  $('#mWatch').hidden = !(pres && youTubeEmbed(pres.videoUrl));
+}
 
-  for (let i = feedCount; i < items.length; i++) {
-    const it = items[i];
-    const overNo = overNoOf(it);
-    if (overNo !== null && ['ball', 'four', 'six', 'wicket', 'extra'].includes(it.kind)) {
-      const key = `${it.inning}:${overNo}`;
-      if (key !== feedOverKey) {
-        if (feedOverKey !== null) box.insertBefore(h('div', { class: 'over-mark' }, `Over ${overNo}`), box.firstChild);
-        feedOverKey = key;
+// ---------------------------------------------------------------------------
+// LIVE tab — current batters, bowlers, partnership, recent strip
+// ---------------------------------------------------------------------------
+
+function renderLiveTab() {
+  const box = $('#tab-live');
+  box.textContent = '';
+  const inn = focus();
+  if (!inn) { box.append(h('p', { class: 'cm-info' }, 'The match has not started yet.')); return; }
+
+  const batRows = inn.batters.filter((b) => b.atCrease);
+  const bt = h('table', { class: 'ltable' },
+    h('thead', {}, h('tr', {}, h('th', {}, 'Batters'), h('th', {}, 'R'), h('th', {}, 'B'), h('th', {}, '4s'), h('th', {}, '6s'), h('th', {}, 'SR'))),
+    h('tbody', {}, batRows.length ? batRows.map((b) => h('tr', {},
+      h('td', { class: 'pl' }, `${b.name}${b.id === inn.striker ? '*' : ''}`),
+      h('td', {}, h('b', {}, b.runs)), h('td', {}, b.balls), h('td', {}, b.fours), h('td', {}, b.sixes),
+      h('td', {}, b.balls ? b.sr.toFixed(2) : '-'),
+    )) : h('tr', { class: 'dim' }, h('td', { colspan: '6' }, inn.closed ? 'Innings over' : 'Waiting for the openers…'))));
+
+  const bowlIds = [inn.currentBowlerId, inn.lastOverBowlerId].filter(Boolean);
+  const bowlRows = inn.bowlers.filter((b) => bowlIds.includes(b.id));
+  const wt = h('table', { class: 'ltable' },
+    h('thead', {}, h('tr', {}, h('th', {}, 'Bowlers'), h('th', {}, 'O'), h('th', {}, 'M'), h('th', {}, 'R'), h('th', {}, 'W'), h('th', {}, 'Eco'))),
+    h('tbody', {}, bowlRows.length ? bowlRows.map((b) => h('tr', {},
+      h('td', { class: 'pl' }, `${b.name}${b.id === inn.currentBowlerId ? '*' : ''}`),
+      h('td', {}, b.oversText), h('td', {}, b.maidens), h('td', {}, b.runs), h('td', {}, h('b', {}, b.wickets)),
+      h('td', {}, b.balls ? b.econ.toFixed(2) : '-'),
+    )) : h('tr', { class: 'dim' }, h('td', { colspan: '6' }, 'Waiting for the bowler…'))));
+
+  box.append(bt, wt);
+
+  const p = inn.currentPartnership;
+  if (p) {
+    box.append(h('div', { class: 'strip-row' },
+      h('span', { class: 'lab' }, 'Current Partnership:'), h('b', { class: 'num' }, `${p.runs}(${p.balls})`)));
+  }
+
+  const recent = h('div', { class: 'strip-row' }, h('span', { class: 'lab' }, 'RECENT :'));
+  const last = inn.lastOver || [];
+  const cur = inn.thisOver || [];
+  if (last.length) { last.forEach((t) => recent.append(bubble(t))); if (cur.length) recent.append(h('span', { class: 'bub-sep' }, '|')); }
+  cur.forEach((t) => recent.append(bubble(t)));
+  if (last.length || cur.length) box.append(recent);
+
+  if (state.chase) {
+    box.append(h('div', { class: 'strip-row' },
+      h('span', { class: 'lab' }, 'Chase:'),
+      h('span', {}, `need ${state.chase.need} off ${state.chase.ballsLeft} balls (target ${state.chase.target}, RRR ${fmt.num1(state.chase.rrr)})`)));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SCORECARD tab — full cards for every innings
+// ---------------------------------------------------------------------------
+
+function renderScorecardTab() {
+  const box = $('#tab-scorecard');
+  box.textContent = '';
+  if (!state.innings.length) { box.append(h('p', { class: 'cm-info' }, 'No innings yet.')); return; }
+  for (const inn of [...state.innings].reverse()) {
+    const team = teamOf(state, inn.battingTeamId);
+    box.append(h('div', { class: 'sc-innings-head' },
+      h('span', {}, h('span', { class: 'chip2', style: { background: team.color, display: 'inline-block' } }),
+        `${team.name} ${inn.superOver ? '· Super Over' : `· ${['1st', '2nd'][inn.index] || ''} innings`}`),
+      h('span', {}, `${scoreText(inn)} (${inn.oversText} Ov)`)));
+    box.append(h('table', { class: 'ltable' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Batter'), h('th', {}, 'R'), h('th', {}, 'B'), h('th', {}, '4s'), h('th', {}, '6s'), h('th', {}, 'SR'))),
+      h('tbody', {},
+        inn.batters.map((b) => h('tr', {},
+          h('td', { class: 'pl' }, `${b.name}${b.atCrease && !inn.closed ? '*' : ''}`, h('span', { class: 'out-how' }, b.howOut)),
+          h('td', {}, h('b', {}, b.runs)), h('td', {}, b.balls), h('td', {}, b.fours), h('td', {}, b.sixes),
+          h('td', {}, b.balls ? b.sr.toFixed(2) : '-'))))));
+    const dnb = state.squads[inn.battingTeamId].filter((p) => !inn.batters.some((b) => b.id === p.id));
+    box.append(h('div', { class: 'sc-sub' },
+      h('span', {}, 'Extras ', h('b', {}, `${inn.extras.total}`),
+        ` (wd ${inn.extras.wides}, nb ${inn.extras.noballs}, b ${inn.extras.byes}, lb ${inn.extras.legbyes}${inn.extras.penalties ? `, pen ${inn.extras.penalties}` : ''})`)));
+    if (dnb.length && !inn.closed) box.append(h('div', { class: 'sc-sub' }, 'Yet to bat: ', dnb.map((p) => p.name).join(', ')));
+    if (inn.fow.length) {
+      box.append(h('div', { class: 'sc-sub' }, h('b', {}, 'Fall of wickets: '),
+        inn.fow.map((f) => `${f.runs}-${f.wicket} (${f.batterName}, ${f.overs})`).join(' · ')));
+    }
+    box.append(h('table', { class: 'ltable' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Bowler'), h('th', {}, 'O'), h('th', {}, 'M'), h('th', {}, 'R'), h('th', {}, 'W'), h('th', {}, 'Eco'))),
+      h('tbody', {}, inn.bowlers.map((b) => h('tr', {},
+        h('td', { class: 'pl' }, b.name),
+        h('td', {}, b.oversText), h('td', {}, b.maidens), h('td', {}, b.runs), h('td', {}, h('b', {}, b.wickets)),
+        h('td', {}, b.balls ? b.econ.toFixed(2) : '-'))))));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// COMMENTARY tab — end-of-over blocks + ball-by-ball, newest first
+// ---------------------------------------------------------------------------
+
+async function overSnapshots() {
+  if (evCache.version === app.version && evCache.snaps) return evCache.snaps;
+  try {
+    const { events } = await app.fetchEvents();
+    const marks = [];
+    let innIdx = -1;
+    let legal = 0;
+    events.forEach((e, i) => {
+      if (e.type === 'INNINGS_START') { innIdx += 1; legal = 0; }
+      if (e.type === 'BALL' && (!e.legality || e.legality === 'legal')) {
+        legal += 1;
+        if (legal % 6 === 0) marks.push({ at: i, inning: innIdx, over: legal / 6 });
+      }
+    });
+    const snaps = new Map(); // `${inning}:${over}` -> reduced state
+    for (const mk of marks) snaps.set(`${mk.inning}:${mk.over}`, reduce(events.slice(0, mk.at + 1)));
+    evCache.version = app.version;
+    evCache.snaps = snaps;
+  } catch { evCache.snaps = evCache.snaps || new Map(); }
+  return evCache.snaps;
+}
+
+function overBlock(snap, over) {
+  const inn = snap.innings[snap.innings.length - 1];
+  const ob = inn.overByOver.find((o) => o.over === over);
+  const batters = inn.batters.filter((b) => b.atCrease);
+  const bowlIds = [inn.lastOverBowlerId, inn.currentBowlerId].filter(Boolean);
+  const bowlers = inn.bowlers.filter((b) => bowlIds.includes(b.id));
+  return h('div', { class: 'ov-block' },
+    h('div', { class: 'ovb-top' }, h('span', {}, `END OF OVER ${over}`), h('span', {}, scoreText(inn))),
+    ob ? h('div', { class: 'ovb-sub' }, `${ob.runs} Run${ob.runs === 1 ? '' : 's'} ${ob.wickets} Wkt${ob.wickets === 1 ? '' : 's'}${ob.maiden ? ' · Maiden' : ''}`) : null,
+    h('div', { class: 'ovb-cols' },
+      h('div', {}, batters.map((b) => h('div', { class: 'ovb-line' }, h('span', {}, `${b.name}${b.id === inn.striker ? '*' : ''}`), h('b', {}, `${b.runs} (${b.balls})`)))),
+      h('div', {}, bowlers.map((b) => h('div', { class: 'ovb-line' }, h('span', {}, b.name), h('b', {}, fmt.figures(b)))))));
+}
+
+async function renderCommentaryTab() {
+  const box = $('#tab-commentary');
+  box.textContent = '';
+  const items = (state.feed || []).filter((f) => f.ov || f.kind === 'result' || f.kind === 'innings' || f.kind === 'info');
+  if (!items.length) { box.append(h('p', { class: 'cm-info' }, 'Ball-by-ball commentary will appear here.')); return; }
+  const snaps = await overSnapshots();
+
+  // group ball entries by (inning, over); non-ball entries ride along in order
+  const groups = [];
+  let cur = null;
+  for (const it of items) {
+    const ov = overNoOf(it);
+    const key = ov === null ? (cur ? cur.key : 'pre') : `${it.inning}:${ov}`;
+    if (!cur || cur.key !== key) { cur = { key, inning: it.inning, over: ov, items: [] }; groups.push(cur); }
+    cur.items.push(it);
+  }
+  groups.reverse(); // newest over first
+  const visible = showAllOvers ? groups : groups.slice(0, 8);
+
+  for (const g of visible) {
+    const snap = g.over !== null ? snaps.get(`${g.inning}:${g.over}`) : null;
+    if (snap) box.append(overBlock(snap, g.over));
+    for (const it of [...g.items].reverse()) {
+      if (['ball', 'four', 'six', 'wicket', 'extra'].includes(it.kind)) {
+        box.append(h('div', { class: `cm-row${['four', 'six', 'wicket'].includes(it.kind) ? ' hl' : ''}` },
+          h('span', { class: 'ovno' }, it.ov), feedBubble(it), h('span', { class: 'cm-text' }, it.text)));
+      } else {
+        box.append(h('div', { class: 'cm-info' }, it.text));
       }
     }
-    box.insertBefore(feedItem(it), box.firstChild);
   }
-  feedCount = items.length;
+  if (!showAllOvers && groups.length > visible.length) {
+    box.append(h('button', { class: 'cm-more', onclick: () => { showAllOvers = true; renderCommentaryTab(); } },
+      `Show ${groups.length - visible.length} earlier over${groups.length - visible.length === 1 ? '' : 's'}`));
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Overs chart (inline SVG, one per innings)
+// ANALYSIS (overs chart) + TEAMS tabs
 // ---------------------------------------------------------------------------
 
-function oversChart(st, inn) {
-  const data = inn.overByOver || [];
-  const n = Math.max(data.length, Math.min(inn.oversLimit || data.length, 50), 1);
-  const slot = 30, barW = 20;
-  const padL = 30, padR = 6, padT = 30, padB = 20, plotH = 130;
-  const W = padL + n * slot + padR;
-  const H = padT + plotH + padB;
-  const maxRuns = Math.max(6, ...data.map((o) => o.runs));
-  const ymax = Math.ceil(maxRuns / 6) * 6;
-  const yStep = ymax > 24 ? 12 : 6;
-  const y = (v) => padT + plotH - (v / ymax) * plotH;
-
-  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Runs per over' });
-
-  for (let v = 0; v <= ymax; v += yStep) { // recessive hairline grid
-    svg.append(s('line', { x1: padL, y1: y(v), x2: W - padR, y2: y(v), stroke: 'rgba(255,255,255,0.08)', 'stroke-width': 1 }));
-    svg.append(s('text', { x: padL - 6, y: y(v) + 3, 'text-anchor': 'end', fill: '#9aa7b5', 'font-size': 10 }, v));
+function renderOversTab() {
+  const box = $('#tab-overs');
+  box.textContent = '';
+  const wrap = h('div', { class: 'ovch' });
+  let any = false;
+  for (const inn of state.innings) {
+    if (!inn.overByOver.length) continue;
+    any = true;
+    const team = teamOf(state, inn.battingTeamId);
+    wrap.append(h('h4', {}, `${team.name} — runs per over`));
+    const W = 640;
+    const H = 150;
+    const n = Math.max(inn.oversLimit, inn.overByOver.length);
+    const bw = Math.min(28, (W - 20) / n - 6);
+    const max = Math.max(12, ...inn.overByOver.map((o) => o.runs));
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('style', 'width:100%;height:auto');
+    inn.overByOver.forEach((o, i) => {
+      const x = 10 + i * ((W - 20) / n);
+      const bh = Math.max(3, (o.runs / max) * (H - 36));
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      r.setAttribute('x', x); r.setAttribute('y', H - 22 - bh);
+      r.setAttribute('width', bw); r.setAttribute('height', bh);
+      r.setAttribute('rx', 3); r.setAttribute('fill', o.maiden ? '#c9d1da' : team.color);
+      svg.append(r);
+      if (o.wickets) {
+        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        c.setAttribute('cx', x + bw / 2); c.setAttribute('cy', H - 30 - bh);
+        c.setAttribute('r', 4); c.setAttribute('fill', '#d0342c');
+        svg.append(c);
+      }
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', x + bw / 2); t.setAttribute('y', H - 8);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '9'); t.setAttribute('fill', '#8a93a3');
+      t.textContent = o.over;
+      svg.append(t);
+    });
+    wrap.append(svg);
   }
+  if (!any) wrap.append(h('p', { class: 'cm-info' }, 'The runs-per-over chart appears after the first over.'));
+  box.append(wrap);
+}
 
-  const maxOver = data.reduce((m, o) => (o.runs > (m ? m.runs : -1) ? o : m), null);
-  data.forEach((o, i) => {
-    const x = padL + i * slot + (slot - barW) / 2;
-    const hgt = Math.max((o.runs / ymax) * plotH, 2);
-    const top = padT + plotH - hgt;
-    const r = Math.min(4, hgt);
-    const g = s('g', {});
-    g.append(s('title', {}, `Over ${o.over}: ${o.runs} run${o.runs === 1 ? '' : 's'}${o.wickets ? `, ${o.wickets} wkt` : ''}${o.maiden ? ' (maiden)' : ''}`));
-    // rounded data-end, square baseline
-    g.append(s('path', {
-      d: `M${x},${padT + plotH} L${x},${top + r} Q${x},${top} ${x + r},${top} L${x + barW - r},${top} Q${x + barW},${top} ${x + barW},${top + r} L${x + barW},${padT + plotH} Z`,
-      fill: teamOf(st, inn.battingTeamId).color,
+function renderTeamsTab() {
+  const box = $('#tab-teams');
+  box.textContent = '';
+  const grid = h('div', { class: 'teams-grid' });
+  for (const t of state.config.teams) {
+    grid.append(h('div', { class: 'tcol' },
+      h('h3', {}, h('span', { class: 'tchip', style: { background: t.color, width: '10px', height: '10px', borderRadius: '3px', display: 'inline-block' } }), `${t.name} (${t.short})`),
+      h('ul', {}, state.squads[t.id].map((p) => h('li', {}, p.name)))));
+  }
+  box.append(grid);
+}
+
+// ---------------------------------------------------------------------------
+// sidebar
+// ---------------------------------------------------------------------------
+
+function renderSidebar() {
+  // video
+  const v = $('#videoCard');
+  v.textContent = '';
+  const embed = pres ? youTubeEmbed(pres.videoUrl) : null;
+  const wrapEl = h('div', { class: 'video-wrap' });
+  if (embed) {
+    wrapEl.append(h('iframe', {
+      src: embed, allow: 'autoplay; encrypted-media; picture-in-picture', allowfullscreen: true,
+      title: 'Live stream',
     }));
-    for (let k = 0; k < o.wickets; k++) {
-      g.append(s('circle', { cx: x + barW / 2, cy: top - 9 - k * 11, r: 4, fill: '#ff5a52', stroke: '#161d27', 'stroke-width': 2 }));
-    }
-    if (o === maxOver && !o.wickets) { // selective label: the biggest over
-      g.append(s('text', { x: x + barW / 2, y: top - 6, 'text-anchor': 'middle', fill: '#9aa7b5', 'font-size': 10, 'font-weight': 700 }, o.runs));
-    }
-    g.append(s('rect', { x: padL + i * slot, y: padT, width: slot, height: plotH, fill: 'transparent' })); // hover/tap target
-    svg.append(g);
-  });
-
-  for (let ov = 5; ov <= n; ov += 5) {
-    svg.append(s('text', { x: padL + (ov - 1) * slot + slot / 2, y: padT + plotH + 14, 'text-anchor': 'middle', fill: '#9aa7b5', 'font-size': 10 }, ov));
+  } else {
+    wrapEl.append(h('div', { class: 'video-empty' },
+      h('span', { style: { fontSize: '26px' } }, '▶'),
+      'No live video linked yet.',
+      h('span', { class: 'small' }, 'The director can add the YouTube link from the director panel.')));
   }
-  svg.append(s('line', { x1: padL, y1: padT + plotH, x2: W - padR, y2: padT + plotH, stroke: 'rgba(255,255,255,0.25)', 'stroke-width': 1 }));
-  return svg;
-}
+  v.append(h('h3', {}, 'Live stream'), wrapEl,
+    h('div', { class: 'video-meta' },
+      h('span', {}, 'LIVE VIEWERS: ', h('b', {}, String(viewers))),
+      embed ? h('a', { href: pres.videoUrl, target: '_blank', rel: 'noopener' }, 'Watch on YouTube') : ''));
 
-function renderOvers(st) {
-  const sec = $('#sec-overs');
-  sec.textContent = '';
-  const played = st.innings.filter((i) => (i.overByOver || []).length);
-  if (!played.length) {
-    sec.append(h('p', { class: 'empty' }, 'The over-by-over chart appears once play begins.'));
-    return;
+  // run rate / projection
+  const rr = $('#rrCard');
+  rr.textContent = '';
+  const inn = focus();
+  if (inn && !inn.closed && !state.chase) {
+    const projected = inn.legalBalls ? Math.round((inn.crr * inn.oversLimit)) : 0;
+    rr.append(h('div', { class: 'rr-grid' },
+      h('div', {}, h('div', { class: 'k' }, 'Current RR'), h('div', { class: 'v' }, fmt.num1(inn.crr) === '—' ? '0.0' : inn.crr.toFixed(2))),
+      h('div', {}, h('div', { class: 'k' }, 'Projected Score'), h('div', { class: 'v' }, String(projected), ' ', h('small', {}, `(at ${inn.crr.toFixed(2)} RPO)`)))));
+  } else if (state.chase) {
+    rr.append(h('div', { class: 'rr-grid' },
+      h('div', {}, h('div', { class: 'k' }, 'Current RR'), h('div', { class: 'v' }, inn.crr.toFixed(2))),
+      h('div', {}, h('div', { class: 'k' }, `Need ${state.chase.need} off ${state.chase.ballsLeft}`), h('div', { class: 'v' }, fmt.num1(state.chase.rrr), ' ', h('small', {}, 'req. RR')))));
+  } else if (state.result) {
+    rr.append(h('div', {}, h('div', { class: 'k' }, 'Result'), h('div', { style: { fontWeight: '800', marginTop: '4px' } }, state.result.text)));
+  } else {
+    rr.append(h('div', { class: 'k' }, 'Run rates appear once the match starts.'));
   }
-  for (const inn of played) {
-    const team = teamOf(st, inn.battingTeamId);
-    sec.append(h('div', { class: 'ochart card' },
-      h('h3', {},
-        h('span', { class: 'tchip', style: { background: team.color } }),
-        `${team.name}${inn.superOver ? ' — Super over' : ''}`,
-        h('span', { class: 'osc num' }, `${inn.runs}/${inn.wickets}`)),
-      oversChart(st, inn)));
-  }
-}
 
-// ---------------------------------------------------------------------------
-// Info
-// ---------------------------------------------------------------------------
-
-function renderInfo(st) {
-  const sec = $('#sec-info');
-  const c = st.config;
-  const rules = [];
-  if (c.rules.freeHit) rules.push('Free hit');
-  if (c.rules.lastManStands) rules.push('Last man stands');
-  if (c.rules.noLbw) rules.push('No LBW');
-  if (c.rules.jokerAllowed) rules.push('Joker');
-  if (c.superOver) rules.push('Super over on tie');
-  rules.push(`Wide = ${c.rules.wideRuns}`, `No-ball = ${c.rules.noBallRuns}`);
-
-  const toss = c.toss
-    ? `${teamOf(st, c.toss.winner).name} won the toss and chose to ${c.toss.decision === 'bat' ? 'bat' : 'bowl'}`
-    : 'No toss recorded';
-
-  const row = (lbl, val, cls) => h('div', { class: 'info-row' },
-    h('span', { class: 'lbl' }, lbl), h('span', { class: `val${cls ? ` ${cls}` : ''}` }, val));
-
-  sec.textContent = '';
-  sec.append(h('div', { class: 'info-list card' },
-    c.name ? row('Match', c.name) : null,
-    row('Venue', c.venue || '—'),
-    row('Format', `${c.oversPerInnings} overs a side · max ${c.maxOversPerBowler} overs per bowler`),
-    row('Toss', toss),
-    row('Rules', h('span', { class: 'rule-chips' }, rules.map((r) => h('span', { class: 'pill' }, r)))),
-    row('Match ID', st ? matchId || '—' : '—', 'mono')));
+  // details
+  const d = $('#detailsCard');
+  d.textContent = '';
+  d.append(h('h3', {}, 'Match details'), h('div', { class: 'dl' },
+    h('div', {}, h('div', { class: 'k' }, 'Match Date'), dateText(meta.createdAt) || '—'),
+    state.config.venue ? h('div', {}, h('div', { class: 'k' }, 'Location'), state.config.venue) : '',
+    h('div', {}, h('div', { class: 'k' }, 'Format'), `Limited Overs — ${state.config.oversPerInnings} overs, max ${state.config.maxOversPerBowler}/bowler`),
+    h('div', {}, h('div', { class: 'k' }, 'Match id'), matchId || app.matchId || ''),
+    h('div', {}, h('div', { class: 'k' }, 'Last Updated'), lastUpdated ? timeText(lastUpdated) : '—')));
 }
 
 // ---------------------------------------------------------------------------
-// Share + QR
+// tabs + boot
 // ---------------------------------------------------------------------------
+
+function showTab(name) {
+  activeTab = name;
+  for (const btn of $$('#tabs button')) btn.classList.toggle('on', btn.dataset.tab === name);
+  for (const p of $$('.tabpanel')) p.hidden = p.id !== `tab-${name}`;
+  renderActiveTab();
+}
+
+function renderActiveTab() {
+  if (!state || !state.config) return;
+  if (activeTab === 'live') renderLiveTab();
+  else if (activeTab === 'scorecard') renderScorecardTab();
+  else if (activeTab === 'commentary') renderCommentaryTab();
+  else if (activeTab === 'overs') renderOversTab();
+  else if (activeTab === 'teams') renderTeamsTab();
+}
+
+function renderAll() {
+  if (!state || !state.config) return;
+  renderMatchCard();
+  renderActiveTab();
+  renderSidebar();
+}
+
+$$('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 $('#shareBtn').addEventListener('click', async () => {
   const data = { title: document.title, url: location.href };
-  if (navigator.share) {
-    try { await navigator.share(data); return; } catch { /* cancelled */ }
-  } else {
-    await copyText(location.href);
-    toast('Link copied');
-  }
+  if (navigator.share) { try { await navigator.share(data); } catch { /* dismissed */ } }
+  else { await copyText(location.href); toast('Link copied'); }
 });
-
 $('#qrBtn').addEventListener('click', () => {
-  const url = location.href;
-  const back = h('div', { class: 'sheet-backdrop' },
-    h('div', { class: 'sheet qr-box' },
-      h('h3', {}, 'Scan to follow live'),
-      h('img', { src: `/qr.svg?text=${encodeURIComponent(url)}`, alt: 'QR code for this page' }),
-      h('div', { class: 'url' }, url),
-      h('div', { class: 'row', style: { justifyContent: 'center' } },
-        h('button', { class: 'btn', onclick: async () => { await copyText(url); toast('Link copied'); } }, 'Copy link'),
-        h('button', { class: 'btn primary', onclick: () => back.remove() }, 'Close'))));
-  back.addEventListener('click', (e) => { if (e.target === back) back.remove(); });
-  $('#modal').append(back);
+  $('#qrImg').src = `/qr.svg?text=${encodeURIComponent(location.href)}`;
+  $('#qrModal').hidden = false;
 });
-
-// ---------------------------------------------------------------------------
-// Boot
-// ---------------------------------------------------------------------------
+$('#qrClose').addEventListener('click', () => { $('#qrModal').hidden = true; });
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
-connect({
-  matchId,
-  role: 'view',
-  onState(st, version) {
-    renderHeader(st);
-    renderScorecard(st);
-    renderFeed(st, version);
-    renderOvers(st);
-    renderInfo(st);
-  },
-  onBranding(b) {
-    if (b && b.accent) document.documentElement.style.setProperty('--accent', b.accent);
-  },
-  onStatus(sst) {
-    $('#offline').hidden = sst !== 'offline';
-    if (sst === 'no-match') {
-      $('#matchTitle').textContent = 'Match not found';
-      $('#sec-scorecard').textContent = '';
-      $('#sec-scorecard').append(h('p', { class: 'empty' }, 'No match with this id on this server. ', h('a', { href: '/matches' }, 'All matches')));
-    }
-  },
-});
+(async () => {
+  try {
+    const snap = await (await fetch(`/api/matches/${matchId}`)).json();
+    meta.createdAt = snap.createdAt || null;
+  } catch { /* fine — dates stay blank */ }
+
+  app = await connect({
+    matchId,
+    role: 'view',
+    onState(st) {
+      state = st;
+      lastUpdated = Date.now();
+      renderAll();
+    },
+    onPresentation(p) { pres = p; renderSidebar(); renderMatchCard(); },
+    onBranding(b) {
+      if (!b) return;
+      if (b.accent) document.documentElement.style.setProperty('--accent', b.accent);
+      if (b.orgName) $('#bbName').textContent = b.orgName;
+      if (b.logo) { $('#bbLogo').src = b.logo; $('#bbLogo').hidden = false; }
+    },
+    onViewers(n) { viewers = n; renderSidebar(); },
+    onStatus(s) {
+      $('#offline').hidden = s !== 'offline';
+      if (s === 'no-match') {
+        $('#matchLabel').textContent = 'Match not found';
+        $('#tab-live').textContent = '';
+        $('#tab-live').append(h('p', { class: 'cm-info' }, 'No match with this id on this server. ', h('a', { href: '/matches' }, 'All matches')));
+      }
+    },
+  });
+})();

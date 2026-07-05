@@ -32,7 +32,7 @@ match becomes active. All static assets live under `/client/...`;
   streaming: { rtmp: bool } }` (`rtmp` = ffmpeg found → phone-only YouTube broadcast available)
 - `GET /api/matches` → `[{ id, phase, teams:[{id,name,short,color}], innings:[{battingTeamId,runs,wickets,overs,superOver}], result, createdAt, updatedAt }]`
 - `POST /api/matches` body `{ config }` (shape: engine `normalizeConfig` input, §5) → `{ id, scorerPin, directorPin, summary }`
-- `GET /api/matches/:id` → `{ matchId, version, state, presentation }`
+- `GET /api/matches/:id` → `{ matchId, version, createdAt, updatedAt, state, presentation }`
 - `GET /api/matches/:id/events` → `{ matchId, version, events }` (for the edit log)
 - `GET /api/matches/:id/export` → downloadable match JSON `{ format, id, title, events }`
 - `POST /api/import` body = an export file → `{ id, scorerPin, directorPin, summary }`
@@ -90,6 +90,8 @@ Server → client (broadcast to the match room):
 - `scorer-revoked { matchId }` / `streamer-revoked { matchId }` — this device
   lost that lock; go read-only. Also re-sent whenever a stale device tries to act.
 - `stream:status` / `stream:publisher-changed` — see §11.
+- `viewers { matchId, count }` — live audience size for the match room,
+  broadcast on every join/disconnect (the public page's LIVE VIEWERS counter).
 
 ## 4. `state` shape (produced by `engine reduce()`)
 
@@ -214,6 +216,8 @@ gracefully).
 presentation = {
   "theme": "broadcast" | "chroma",   // chroma = solid #00b140 page background
   "ticker": "",                       // free text; empty = hidden
+  "videoUrl": "",                     // YouTube link, set from the director panel;
+                                      // the public /live page embeds it in its video card
   "auto": true,                       // auto stingers / auto cards
   "show": { "scorebug": true, "batting": false, "bowling": false,
             "summary": false, "lineups": false, "target": false }
