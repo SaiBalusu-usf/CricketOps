@@ -326,8 +326,8 @@ is no parallel data path.
 the server's ffmpeg (`FFMPEG_PATH` env or `ffmpeg` on PATH):
 
 - `stream:set-key { matchId, key }` / `stream:clear-key { matchId }`
-  (lock-holding streamer only). The key is **write-only**: stored in
-  `data/matches/<id>/stream.json` (mode 0600), never in `state`, exports,
+  (lock-holding streamer only). The key is **write-only**: stored in Postgres
+  separately from events and presentation, never in `state`, exports,
   `/api/matches/:id`, status payloads, or logs. Acks/status expose only
   `{ hasKey, keyTail:'…abcd' }`.
 - `stream:start { matchId, mimeType }` → spawns ffmpeg (H.264 input → copy,

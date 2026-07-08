@@ -1,6 +1,9 @@
 node_modules/
 data/
 !data/.gitkeep
+.env
+.env.*
+!.env.docker.example
 *.log
 .DS_Store
 scratch/

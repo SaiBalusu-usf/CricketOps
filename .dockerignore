@@ -2,3 +2,10 @@ node_modules
 data
 scratch
 .git
+.env
+.env.*
+!.env.docker.example
+.cache
+.config
+.DS_Store
+screenshots

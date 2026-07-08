@@ -34,9 +34,9 @@ export function createStreamManager({ io, room, readKey }) {
     return key ? String(text).split(key).join('•••') : String(text);
   }
 
-  function publicStatus(matchId) {
-    const s = sessions.get(matchId);
-    const key = readKey(matchId);
+    async function publicStatus(matchId) {
+      const s = sessions.get(matchId);
+      const key = await readKey(matchId);
     const base = {
       rtmp: !!ffmpegPath,
       hasKey: !!key,
@@ -63,8 +63,8 @@ export function createStreamManager({ io, room, readKey }) {
     };
   }
 
-  function broadcast(matchId) {
-    io.to(room(matchId)).emit('stream:status', { matchId, ...publicStatus(matchId) });
+  async function broadcast(matchId) {
+    io.to(room(matchId)).emit('stream:status', { matchId, ...(await publicStatus(matchId)) });
   }
 
   function buildArgs(mimeType, output) {
@@ -103,10 +103,10 @@ export function createStreamManager({ io, room, readKey }) {
     publicStatus,
 
     /** Spawn ffmpeg for this match. Only the lock-holding streamer socket calls this. */
-    start(matchId, socketId, { mimeType } = {}, ack = () => {}) {
+    async start(matchId, socketId, { mimeType } = {}, ack = () => {}) {
       if (!ffmpegPath) return ack({ ok: false, errors: ['ffmpeg is not installed on the server host'] });
       const testOutput = process.env.STREAM_TEST_OUTPUT === 'null';
-      const key = readKey(matchId);
+      const key = await readKey(matchId);
       if (!key && !testOutput) return ack({ ok: false, errors: ['no stream key set — paste it from YouTube Studio first'] });
 
       // a restart from the same (or a new) streamer replaces the old pipe —

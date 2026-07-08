@@ -2,7 +2,7 @@
 
 This walks you from nothing to a live YouTube stream with a professional score
 overlay, using one laptop, one camera, and a phone hotspot. It assumes you can
-already run the scoring app (`npm start` — see [README.md](README.md)).
+already run the Docker stack — see [README.md](README.md).
 
 **Read section 1 today, even if the match is next month.**
 
@@ -26,13 +26,13 @@ requirements you may have heard about apply to streaming from the YouTube
 
 > **HTTPS note:** phone browsers only unlock the camera on `https://` pages
 > (or localhost). On plain LAN HTTP the `/stream` page cannot open the camera —
-> run the free quick tunnel from [HOSTING.md](HOSTING.md) Tier 1 and open the
-> `https://…trycloudflare.com/stream/<matchId>` URL on the phone instead.
+> use the Docker Nginx HTTPS entrypoint:
+> `https://<laptop-ip>:3443/stream/<matchId>`. The phone must trust the local
+> CA from `http://<laptop-ip>:3333/__ca.crt` once.
 
-If the machine running the server has **ffmpeg** installed (`ffmpeg` on PATH,
-or set `FFMPEG_PATH=`), you can skip OBS entirely:
+Because the Docker app container includes **ffmpeg**, you can skip OBS entirely:
 
-1. Open `http://<server-address>:3333/stream/<matchId>` on the camera phone
+1. Open `https://<laptop-ip>:3443/stream/<matchId>` on the camera phone
    and join with the **director PIN**.
 2. Tap **Broadcast…** → paste the stream key from YouTube Studio
    (**Create → Go live → Streaming software**) → **Save key**. The key is
@@ -46,8 +46,8 @@ or set `FFMPEG_PATH=`), you can skip OBS entirely:
 4. To stop: **STOP BROADCAST**. If the connection blips, the stream resumes
    by itself after a short gap.
 
-Without ffmpeg the same page still works as the wireless camera for OBS
-(Option A below) — the broadcast button simply explains what is missing.
+If outbound RTMP is blocked by the network, the same page still works as the
+wireless camera for OBS (Option A below).
 
 ## 2. OBS setup
 
@@ -58,7 +58,7 @@ once ("Optimize for streaming") and then set up one scene with three things:
 ### Camera
 
 - **Phone as camera — built in, free, HD (recommended):** open
-  `http://<laptop-address>:3333/stream/<matchId>` on the camera phone, enter
+  `https://<laptop-ip>:3443/stream/<matchId>` on the camera phone, enter
   the **director PIN**, and the phone becomes a wireless camera. In OBS add
   **Sources → + → Browser** with URL
   `http://localhost:3333/stream/program?match=<matchId>`, width 1920,
@@ -129,7 +129,7 @@ Print this.
 
 - [ ] Charge: laptop, **streamer phone** (bring its cable — it films the whole match), scorer's phone, hotspot phone. Bring a power bank.
 - [ ] Start the hotspot; connect the **laptop** to it.
-- [ ] On the laptop: `npm start` in the CricketOps folder.
+- [ ] On the laptop: `docker compose up --build` in the CricketOps folder.
 - [ ] Create the match at `http://localhost:3333` → **write down both PINs** (shown once).
 - [ ] Scorer's phone: same hotspot → scan the QR on the landing page → console → scorer PIN.
 - [ ] Streamer phone: open `/stream/<matchId>` → director PIN → frame the pitch; **keep the page foregrounded**, disable auto-lock.
@@ -139,8 +139,8 @@ Print this.
 - [ ] **Record 30 seconds** (Start Recording, not streaming) and play it back — picture and sound.
 - [ ] YouTube Studio → Go live; Start Streaming in OBS; confirm the dashboard shows green.
 - [ ] Start scoring for real.
-- [ ] Share the spectator link: `http://<laptop-LAN-address>:3333/live/<matchId>` on the hotspot, or a
-      `trycloudflare.com` link for the outside world (see README, "Letting people watch from anywhere").
+- [ ] Share the spectator link on the hotspot:
+      `http://<laptop-LAN-address>:3333/live/<matchId>`.
 
 ## 5. Troubleshooting
 
@@ -153,9 +153,7 @@ OBS keyed to green.
 
 **Scorer's phone can't reach the laptop**
 - Both devices must be on the **same** hotspot/Wi-Fi.
-- Windows: the first `npm start` pops a firewall prompt — allow Node.js on
-  **private networks**. If you dismissed it: Windows Security → Firewall →
-  Allow an app → Node.js.
+- If the OS firewall prompts, allow Docker Desktop/Nginx on private networks.
 - Some venue/carrier hotspots have **client isolation** (devices can't see
   each other). Fix: use a phone's own hotspot instead of venue Wi-Fi.
 - Type the exact `Phones (LAN):` URL from the server terminal, not
@@ -172,6 +170,6 @@ leading/trailing spaces. Keys can be reset from that page if in doubt.
 
 **Overlay is frozen / stuck on an old score**
 Right-click the Browser source → **Refresh cache of current page**. The
-server keeps every ball on disk, so the overlay comes back at the correct
-live score. Same cure if you restarted the server mid-match — the match
+server keeps every ball in Postgres, so the overlay comes back at the correct
+live score. Same cure if you restarted the Docker stack mid-match — the match
 resumes automatically.

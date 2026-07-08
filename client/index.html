@@ -126,12 +126,16 @@
       $('#pageFooter').textContent = branding.footer || '';
 
       // active-match buttons
+      const secureBase = (info.httpsUrls && info.httpsUrls[0]) || location.origin;
+
       if (info.activeMatchId) {
         const r = $('#resumeBtn');
         r.href = `/console/${info.activeMatchId}`;
         r.hidden = false;
         $('#watchBtn').href = `/live/${info.activeMatchId}`;
-        $('#streamBtn').href = `/stream/${info.activeMatchId}`;
+        $('#streamBtn').href = `${secureBase}/stream/${info.activeMatchId}`;
+      } else {
+        $('#streamBtn').href = `${secureBase}/stream`;
       }
 
       // OBS overlay URLs — absolute, LAN-reachable. Pinned with ?match= when a

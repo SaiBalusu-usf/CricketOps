@@ -2,11 +2,11 @@
  * ICAT Cricket Live server.
  *
  * One lightweight process serves all four surfaces (console, overlays,
- * director, public live page), persists every event to disk immediately,
+ * director, public live page), persists every event to Postgres immediately,
  * and pushes state to every connected client over Socket.IO.
  *
- * No accounts, no API keys, no cloud calls. Run `npm start` and point
- * phones at the printed LAN URL.
+ * No accounts, no API keys. Run `npm start` and point phones at the printed
+ * LAN URL.
  */
 import http from 'node:http';
 import os from 'node:os';
@@ -28,31 +28,34 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const PORT = parseInt(process.env.PORT || '3333', 10);
 
-store.ensureDirs();
+await store.ensureDirs();
 
 // ---------------------------------------------------------------------------
-// In-memory cache of open matches (source of truth stays on disk)
+// In-memory cache of open matches (source of truth stays in Postgres)
 // ---------------------------------------------------------------------------
 
 const matches = new Map(); // id -> { meta, events, state, presentation }
 
-function loadMatch(id) {
+async function loadMatch(id) {
+  if (!id) return null;
   if (matches.has(id)) return matches.get(id);
-  if (!store.matchExists(id)) return null;
-  const meta = store.readMeta(id);
-  const events = store.readEvents(id);
+  if (!(await store.matchExists(id))) return null;
+  const meta = await store.readMeta(id);
+  const events = await store.readEvents(id);
   const m = {
     meta,
     events,
     state: reduce(events),
-    presentation: store.readPresentation(id),
+    presentation: await store.readPresentation(id),
   };
   matches.set(id, m);
   return m;
 }
 
-function allMatches() {
-  return store.listMatchIds().map((id) => loadMatch(id)).filter(Boolean);
+async function allMatches() {
+  const ids = await store.listMatchIds();
+  const loaded = await Promise.all(ids.map((id) => loadMatch(id)));
+  return loaded.filter(Boolean);
 }
 
 /**
@@ -63,8 +66,8 @@ function allMatches() {
  */
 let cachedActiveMatchId = null;
 
-function refreshActiveMatch() {
-  const all = allMatches();
+async function refreshActiveMatch() {
+  const all = await allMatches();
   if (!all.length) { cachedActiveMatchId = null; return; }
   const live = all.filter((m) => m.state.phase !== 'complete');
   const pool = live.length ? live : all;
@@ -104,6 +107,7 @@ process.on('uncaughtException', (err) => {
 });
 
 const app = express();
+if (process.env.TRUST_PROXY === '1') app.set('trust proxy', true);
 app.use(express.json({ limit: '4mb' })); // imports and logo data URLs
 app.use((req, res, next) => { res.set('Cache-Control', 'no-cache'); next(); });
 
@@ -172,20 +176,32 @@ app.get('/overlay/:kind', (req, res) => {
 
 // ---- REST ------------------------------------------------------------------
 
-app.get('/api/info', (req, res) => {
-  res.json({
-    port: PORT,
-    urls: lanUrls(),
-    activeMatchId: activeMatchId(),
-    streaming: { rtmp: !!streamManager.ffmpegPath },
-  });
+app.get('/api/info', async (req, res, next) => {
+  try {
+    await refreshActiveMatch();
+    res.json({
+      port: PORT,
+      urls: lanUrls(req),
+      httpsUrls: httpsUrls(req),
+      activeMatchId: activeMatchId(),
+      streaming: { rtmp: !!streamManager.ffmpegPath },
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.get('/api/matches', (req, res) => {
-  res.json(allMatches().map(matchSummary).sort((a, b) => b.updatedAt - a.updatedAt));
+app.get('/api/matches', async (req, res, next) => {
+  try {
+    const all = await allMatches();
+    res.json(all.map(matchSummary).sort((a, b) => b.updatedAt - a.updatedAt));
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.post('/api/matches', (req, res) => {
+app.post('/api/matches', async (req, res, next) => {
+  try {
   if (rateLimited(req, res)) return;
   const config = normalizeConfig(req.body?.config || {});
   // sanity cap (kept out of the engine — scoring rules are unaffected)
@@ -201,15 +217,19 @@ app.post('/api/matches', (req, res) => {
     scorerPin: store.makePin(),
     directorPin: store.makePin(),
   };
-  store.createMatch(id, meta, matchCreatedEvent(config, makeId('e'), meta.createdAt));
+  await store.createMatch(id, meta, matchCreatedEvent(config, makeId('e'), meta.createdAt));
   matches.delete(id);
-  const m = loadMatch(id);
-  refreshActiveMatch();
+  const m = await loadMatch(id);
+  await refreshActiveMatch();
   res.json({ id, scorerPin: meta.scorerPin, directorPin: meta.directorPin, summary: matchSummary(m) });
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.get('/api/matches/:id', (req, res) => {
-  const m = loadMatch(req.params.id);
+app.get('/api/matches/:id', async (req, res, next) => {
+  try {
+  const m = await loadMatch(req.params.id);
   if (!m) return res.status(404).json({ error: 'no such match' });
   res.json({
     matchId: m.meta.id,
@@ -219,16 +239,24 @@ app.get('/api/matches/:id', (req, res) => {
     state: m.state,
     presentation: m.presentation,
   });
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.get('/api/matches/:id/events', (req, res) => {
-  const m = loadMatch(req.params.id);
+app.get('/api/matches/:id/events', async (req, res, next) => {
+  try {
+  const m = await loadMatch(req.params.id);
   if (!m) return res.status(404).json({ error: 'no such match' });
   res.json({ matchId: m.meta.id, version: m.events.length, events: m.events });
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.get('/api/matches/:id/export', (req, res) => {
-  const m = loadMatch(req.params.id);
+app.get('/api/matches/:id/export', async (req, res, next) => {
+  try {
+  const m = await loadMatch(req.params.id);
   if (!m) return res.status(404).json({ error: 'no such match' });
   const teams = m.state.config ? m.state.config.teams.map((t) => t.name).join(' v ') : m.meta.id;
   res.set('Content-Disposition', `attachment; filename="${m.meta.id}.icat-match.json"`);
@@ -239,9 +267,13 @@ app.get('/api/matches/:id/export', (req, res) => {
     title: teams,
     events: m.events,
   });
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.post('/api/import', (req, res) => {
+app.post('/api/import', async (req, res, next) => {
+  try {
   if (rateLimited(req, res)) return;
   const body = req.body || {};
   const events = Array.isArray(body.events) ? body.events : null;
@@ -257,25 +289,35 @@ app.post('/api/import', (req, res) => {
     directorPin: store.makePin(),
     importedFrom: body.id || null,
   };
-  store.createMatch(id, meta, events[0]);
-  store.rewriteEvents(id, events);
+  await store.createMatch(id, meta, events[0]);
+  await store.rewriteEvents(id, events);
   matches.delete(id);
-  const m = loadMatch(id);
-  refreshActiveMatch();
+  const m = await loadMatch(id);
+  await refreshActiveMatch();
   res.json({ id, scorerPin: meta.scorerPin, directorPin: meta.directorPin, summary: matchSummary(m) });
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.get('/api/branding', (req, res) => res.json(store.readBranding()));
+app.get('/api/branding', async (req, res, next) => {
+  try {
+    res.json(await store.readBranding());
+  } catch (err) {
+    next(err);
+  }
+});
 
 // B2: branding writes deface the live broadcast, so non-localhost callers
 // must present a scorer/director PIN of a current match via x-icat-pin.
-app.put('/api/branding', (req, res) => {
+app.put('/api/branding', async (req, res, next) => {
+  try {
   if (!isLocalRequest(req)) {
     const ip = req.socket.remoteAddress || 'unknown';
     const wait = pinLockout(ip, '*branding');
     if (wait !== null) return res.status(429).json({ error: 'locked-out', retryInMs: wait });
     const pin = req.get('x-icat-pin');
-    const all = allMatches();
+    const all = await allMatches();
     const current = all.filter((m) => m.state.phase !== 'complete');
     const pool = current.length ? current : all;
     if (!pin || !pool.some((m) => anyPinMatches(m.meta, pin))) {
@@ -284,15 +326,18 @@ app.put('/api/branding', (req, res) => {
     }
     pinPassed(ip, '*branding');
   }
-  const clean = store.writeBranding(req.body || {});
+  const clean = await store.writeBranding(req.body || {});
   io.emit('branding', clean);
   res.json(clean);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // B4: Express 4 does not catch async throws — guard explicitly
 app.get('/qr.svg', async (req, res) => {
   try {
-    const text = String(req.query.text || lanUrls()[0] || `http://localhost:${PORT}/`);
+    const text = String(req.query.text || lanUrls(req)[0] || `http://localhost:${PORT}/`);
     const svg = await QRCode.toString(text.slice(0, 500), { type: 'svg', margin: 1, width: 480 });
     res.type('image/svg+xml').send(svg);
   } catch (err) {
@@ -426,11 +471,11 @@ function broadcastState(m) {
  * (= events.length) it never goes backwards on undo, so clients use it to
  * discard out-of-order state broadcasts.
  */
-function touch(m) {
+async function touch(m) {
   m.meta.updatedAt = Date.now();
   m.meta.rev = (m.meta.rev || 0) + 1;
-  store.writeMeta(m.meta.id, m.meta);
-  refreshActiveMatch();
+  await store.writeMeta(m.meta.id, m.meta);
+  await refreshActiveMatch();
 }
 
 /** Live audience counter for the public page (room size, all roles). */
@@ -442,8 +487,19 @@ function broadcastViewers(id) {
 io.on('connection', (socket) => {
   socket.data.roles = new Map(); // matchId -> 'view' | 'scorer' | 'director'
 
-  socket.on('join', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId || activeMatchId());
+  const on = (event, handler) => {
+    socket.on(event, (...args) => {
+      const maybeAck = args[args.length - 1];
+      const ack = typeof maybeAck === 'function' ? maybeAck : () => {};
+      Promise.resolve(handler(...args)).catch((err) => {
+        console.error(`[socket:${event}]`, err && err.stack ? err.stack : err);
+        ack({ ok: false, errors: ['internal error'] });
+      });
+    });
+  };
+
+  on('join', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId || activeMatchId());
     if (!m) return ack({ ok: false, error: 'no-match' });
     const id = m.meta.id;
     let role = 'view';
@@ -485,9 +541,9 @@ io.on('connection', (socket) => {
       rev: m.meta.rev || 0,
       state: m.state,
       presentation: m.presentation,
-      branding: store.readBranding(),
+      branding: await store.readBranding(),
       pins: role === 'scorer' ? { directorPin: m.meta.directorPin } : undefined,
-      streaming: streamManager.publicStatus(id),
+      streaming: await streamManager.publicStatus(id),
     });
   });
 
@@ -516,8 +572,8 @@ io.on('connection', (socket) => {
     return false;
   };
 
-  socket.on('append', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('append', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     const role = requireRole(m.meta.id, ['scorer', 'director']);
     if (!role) {
@@ -558,18 +614,20 @@ io.on('connection', (socket) => {
 
     const stamped = { id: ev.id || makeId('e'), ts: Date.now(), ...ev };
     const before = m.state;
-    m.events.push(stamped);
-    m.state = reduce(m.events);
-    store.appendEvent(m.meta.id, stamped);
-    touch(m);
+    const events = [...m.events, stamped];
+    const state = reduce(events);
+    await store.appendEvent(m.meta.id, stamped);
+    m.events = events;
+    m.state = state;
+    await touch(m);
     broadcastState(m);
     const fx = computeFx(before, m.state, stamped);
     if (fx.length) io.to(room(m.meta.id)).emit('fx', { matchId: m.meta.id, fx });
     ack({ ok: true, version: m.events.length, warnings: v.warnings });
   });
 
-  socket.on('undo', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('undo', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireRole(m.meta.id, ['scorer'])) {
       if (wasRevokedFrom('scorer-revoked', m.meta.id)) return revokedAck(ack, 'scorer-revoked', m.meta.id);
@@ -578,16 +636,16 @@ io.on('connection', (socket) => {
     if (!requireScorerLock(m, ack)) return;
     const { events, undone } = undoLast(m.events);
     if (!undone) return ack({ ok: false, errors: ['nothing to undo'] });
+    await store.rewriteEvents(m.meta.id, events);
     m.events = events;
     m.state = reduce(m.events);
-    store.rewriteEvents(m.meta.id, m.events);
-    touch(m);
+    await touch(m);
     broadcastState(m);
     ack({ ok: true, undone, version: m.events.length });
   });
 
-  socket.on('edit', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('edit', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireRole(m.meta.id, ['scorer'])) {
       if (wasRevokedFrom('scorer-revoked', m.meta.id)) return revokedAck(ack, 'scorer-revoked', m.meta.id);
@@ -601,16 +659,16 @@ io.on('connection', (socket) => {
       return ack({ ok: false, errors: [e.message] });
     }
     const nextState = reduce(events);
+    await store.rewriteEvents(m.meta.id, events);
     m.events = events;
     m.state = nextState;
-    store.rewriteEvents(m.meta.id, m.events);
-    touch(m);
+    await touch(m);
     broadcastState(m);
     ack({ ok: true, version: m.events.length, anomalies: nextState.anomalies });
   });
 
-  socket.on('presentation', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('presentation', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireRole(m.meta.id, ['scorer', 'director'])) return ack({ ok: false, errors: ['not authorised'] });
     const patch = msg.patch || {};
@@ -619,13 +677,13 @@ io.on('connection', (socket) => {
       ...patch,
       show: { ...m.presentation.show, ...(patch.show || {}) },
     };
-    store.writePresentation(m.meta.id, m.presentation);
+    await store.writePresentation(m.meta.id, m.presentation);
     io.to(room(m.meta.id)).emit('presentation', { matchId: m.meta.id, presentation: m.presentation });
     ack({ ok: true });
   });
 
-  socket.on('fire', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('fire', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireRole(m.meta.id, ['scorer', 'director'])) return ack({ ok: false, errors: ['not authorised'] });
     const fx = Array.isArray(msg.fx) ? msg.fx : [msg.fx];
@@ -651,8 +709,8 @@ io.on('connection', (socket) => {
 
   // Tier 1 WebRTC signaling relay. Viewers (the /stream/program page) request;
   // the lock-holding streamer offers; ICE flows both ways. Payloads are opaque.
-  socket.on('stream:webrtc-request', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:webrtc-request', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, error: 'no-match' });
     const lock = streamerLocks.get(m.meta.id);
     if (!lock || !io.sockets.sockets.has(lock.socketId)) return ack({ ok: false, error: 'no-streamer' });
@@ -660,21 +718,21 @@ io.on('connection', (socket) => {
     ack({ ok: true });
   });
 
-  socket.on('stream:webrtc-offer', (msg = {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:webrtc-offer', async (msg = {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m || !streamerLocks.isHolder(m.meta.id, socket) || !msg.to) return;
     io.to(msg.to).emit('stream:webrtc-offer', { matchId: m.meta.id, from: socket.id, payload: msg.payload });
   });
 
-  socket.on('stream:webrtc-answer', (msg = {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:webrtc-answer', async (msg = {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return;
     const lock = streamerLocks.get(m.meta.id);
     if (lock) io.to(lock.socketId).emit('stream:webrtc-answer', { matchId: m.meta.id, from: socket.id, payload: msg.payload });
   });
 
-  socket.on('stream:ice', (msg = {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:ice', async (msg = {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return;
     const lock = streamerLocks.get(m.meta.id);
     const fromStreamer = lock && lock.socketId === socket.id;
@@ -684,50 +742,50 @@ io.on('connection', (socket) => {
 
   // Tier 2 — stream key + broadcast lifecycle (lock-holding streamer only).
   // The key is write-only: acks/status expose hasKey + last 4 chars, nothing more.
-  socket.on('stream:set-key', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:set-key', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireStreamer(m, ack)) return;
     if (!requireStreamerLock(m, ack)) return;
     const key = String(msg.key || '').trim();
     if (!key || key.length > 128) return ack({ ok: false, errors: ['that does not look like a stream key'] });
-    store.writeStreamKey(m.meta.id, key);
+    await store.writeStreamKey(m.meta.id, key);
     ack({ ok: true, hasKey: true, keyTail: `…${key.slice(-4)}` });
   });
 
-  socket.on('stream:clear-key', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:clear-key', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireStreamer(m, ack)) return;
     if (!requireStreamerLock(m, ack)) return;
-    store.clearStreamKey(m.meta.id);
+    await store.clearStreamKey(m.meta.id);
     ack({ ok: true, hasKey: false });
   });
 
-  socket.on('stream:start', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:start', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireStreamer(m, ack)) return;
     if (!requireStreamerLock(m, ack)) return;
-    streamManager.start(m.meta.id, socket.id, { mimeType: msg.mimeType }, ack);
+    await streamManager.start(m.meta.id, socket.id, { mimeType: msg.mimeType }, ack);
   });
 
-  socket.on('stream:chunk', (msg = {}) => {
+  on('stream:chunk', (msg = {}) => {
     if (!msg.matchId || !streamerLocks.isHolder(msg.matchId, socket)) return;
     if (msg.data) streamManager.chunk(msg.matchId, socket.id, msg.data);
   });
 
-  socket.on('stream:stop', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:stop', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false, errors: ['no such match'] });
     if (!requireStreamer(m, ack)) return;
     streamManager.stop(m.meta.id, socket.id, ack);
   });
 
-  socket.on('stream:status', (msg = {}, ack = () => {}) => {
-    const m = loadMatch(msg.matchId);
+  on('stream:status', async (msg = {}, ack = () => {}) => {
+    const m = await loadMatch(msg.matchId);
     if (!m) return ack({ ok: false });
-    ack({ ok: true, matchId: m.meta.id, ...streamManager.publicStatus(m.meta.id) });
+    ack({ ok: true, matchId: m.meta.id, ...(await streamManager.publicStatus(m.meta.id)) });
   });
 
   socket.on('disconnect', () => {
@@ -744,7 +802,22 @@ io.on('connection', (socket) => {
 // Boot
 // ---------------------------------------------------------------------------
 
-function lanUrls() {
+function configuredOrigins(kind) {
+  const raw = kind === 'https' ? process.env.PUBLIC_HTTPS_ORIGIN : process.env.PUBLIC_HTTP_ORIGIN;
+  return raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+}
+
+function requestOrigin(req) {
+  if (!req) return null;
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
+  return `${proto}://${req.get('host')}`;
+}
+
+function lanUrls(req) {
+  const configured = configuredOrigins('http');
+  if (configured.length) return configured;
+  const origin = requestOrigin(req);
+  if (origin) return [origin];
   // Wi-Fi adapters first: VPN/virtual adapters (Tailscale, WSL, corporate
   // VPNs) often win enumeration order but are unreachable from phones, and
   // the first URL feeds the QR codes.
@@ -764,6 +837,14 @@ function lanUrls() {
   return found.map((f) => `http://${f.address}:${PORT}`);
 }
 
+function httpsUrls(req) {
+  const configured = configuredOrigins('https');
+  if (configured.length) return configured;
+  const origin = requestOrigin(req);
+  if (origin && origin.startsWith('https://')) return [origin];
+  return [];
+}
+
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n  Port ${PORT} is already in use — is another copy running?`);
@@ -774,24 +855,29 @@ server.on('error', (err) => {
 });
 
 function shutdown(signal) {
-  console.log(`\n  ${signal} — shutting down (all match data is already on disk)`);
+  console.log(`\n  ${signal} — shutting down (all match data is already in Postgres)`);
   io.close();
-  server.close(() => process.exit(0));
+  server.close(async () => {
+    await store.close();
+    process.exit(0);
+  });
   setTimeout(() => process.exit(0), 2000).unref();
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-refreshActiveMatch();
+await refreshActiveMatch();
 
 server.listen(PORT, '0.0.0.0', async () => {
   const urls = lanUrls();
+  const secureUrls = httpsUrls();
   const main = urls[0] || `http://localhost:${PORT}`;
   console.log('');
   console.log('  ICAT Cricket Live');
   console.log('  ─────────────────');
   console.log(`  This laptop:   http://localhost:${PORT}`);
   for (const u of urls) console.log(`  Phones (LAN):  ${u}`);
+  for (const u of secureUrls) console.log(`  Phones HTTPS:  ${u}`);
   console.log(`  OBS overlay:   http://localhost:${PORT}/overlay/scorebug   (1920×1080 Browser Source)`);
   console.log('');
   if (urls.length) {
@@ -801,7 +887,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     } catch { /* terminal may not like it — the /qr.svg endpoint still works */ }
   }
   const active = activeMatchId();
-  if (active) console.log(`  Resuming match: ${active} (${matchSummary(loadMatch(active)).phase})`);
+  if (active) console.log(`  Resuming match: ${active} (${matchSummary(await loadMatch(active)).phase})`);
   console.log(`  Phone streaming: Tier 1 (camera to OBS) always on · Tier 2 (direct to YouTube) ${streamManager.ffmpegPath ? `ready (ffmpeg: ${streamManager.ffmpegPath})` : 'needs ffmpeg installed'}`);
   console.log('');
 });

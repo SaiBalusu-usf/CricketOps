@@ -104,27 +104,36 @@ playInnings('B', 46);             // chase paused at 7.4 overs
 
 // ---------------------------------------------------------------------------
 
-store.ensureDirs();
-const id = 'm-demo';
-store.deleteMatch(id);
-const meta = {
-  id, createdAt: Date.now(), updatedAt: Date.now(),
-  scorerPin: '1234', directorPin: '5678', demo: true,
-};
-store.createMatch(id, meta, events[0]);
-store.rewriteEvents(id, events);
+async function main() {
+  await store.ensureDirs();
+  const id = 'm-demo';
+  await store.deleteMatch(id);
+  const meta = {
+    id, createdAt: Date.now(), updatedAt: Date.now(),
+    scorerPin: '1234', directorPin: '5678', demo: true,
+  };
+  await store.createMatch(id, meta, events[0]);
+  await store.rewriteEvents(id, events);
 
-const inn1 = state.innings[0];
-const inn2 = state.innings[1];
-const port = process.env.PORT || 3333;
-console.log('');
-console.log('Demo match seeded ✔');
-console.log(`  ICAT Blue ${inn1.runs}/${inn1.wickets} (${inn1.oversText} ov)`);
-console.log(`  ICAT Gold ${inn2.runs}/${inn2.wickets} (${inn2.oversText} ov) — chasing ${inn1.runs + 1}`);
-console.log('');
-console.log(`  Scorer PIN 1234 · Director PIN 5678 · match id ${id}`);
-console.log(`  Start the server (npm start), then:`);
-console.log(`    console   http://localhost:${port}/console/${id}`);
-console.log(`    scorebug  http://localhost:${port}/overlay/scorebug`);
-console.log(`    live      http://localhost:${port}/live/${id}`);
-console.log('');
+  const inn1 = state.innings[0];
+  const inn2 = state.innings[1];
+  const port = process.env.PUBLIC_HTTP_ORIGIN || `http://localhost:${process.env.PORT || 3333}`;
+  console.log('');
+  console.log('Demo match seeded ✔');
+  console.log(`  ICAT Blue ${inn1.runs}/${inn1.wickets} (${inn1.oversText} ov)`);
+  console.log(`  ICAT Gold ${inn2.runs}/${inn2.wickets} (${inn2.oversText} ov) — chasing ${inn1.runs + 1}`);
+  console.log('');
+  console.log(`  Scorer PIN 1234 · Director PIN 5678 · match id ${id}`);
+  console.log('  With the Docker stack running, visit:');
+  console.log(`    console   ${port}/console/${id}`);
+  console.log(`    scorebug  ${port}/overlay/scorebug?match=${id}`);
+  console.log(`    live      ${port}/live/${id}`);
+  console.log('');
+  await store.close();
+}
+
+main().catch(async (err) => {
+  console.error(err && err.stack ? err.stack : err);
+  await store.close().catch(() => {});
+  process.exit(1);
+});

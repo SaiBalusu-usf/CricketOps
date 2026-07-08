@@ -10,17 +10,19 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test \"engine/tests/*.test.js\"",
+    "db:migrate": "node scripts/migrate.js",
+    "test": "node --test engine/tests/*.test.js",
     "demo": "node scripts/demo.js",
     "acceptance": "node scripts/acceptance.js"
   },
   "dependencies": {
     "express": "^4.21.2",
+    "pg": "^8.13.1",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
-    "playwright-core": "^1.49.1",
+    "playwright-core": "^1.61.1",
     "socket.io-client": "^4.8.3"
   }
 }

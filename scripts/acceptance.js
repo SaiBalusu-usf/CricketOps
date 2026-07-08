@@ -14,7 +14,7 @@
  *   7. open every /overlay/* route at 1920×1080 in headless Chromium:
  *      no JS errors, transparent background, screenshots
  *
- * Uses a throwaway DATA_DIR so real match data is never touched.
+ * Uses a throwaway Postgres test database so real match data is never touched.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,9 +25,9 @@ import { reduce } from '../engine/index.js';
 
 const PORT = process.env.ACCEPT_PORT || 3411;
 const BASE = `http://localhost:${PORT}`;
-const WORK = process.env.ACCEPT_DIR || path.join(process.cwd(), 'scratch', 'acceptance');
-const DATA_DIR = path.join(WORK, 'data');
+const WORK = process.env.ACCEPT_DIR || path.join('/tmp', 'cricketops-acceptance');
 const SHOTS = path.join(WORK, 'shots');
+const ACCEPT_DATABASE_URL = process.env.ACCEPT_DATABASE_URL || process.env.DATABASE_URL;
 
 const results = [];
 const step = (name, fn) => stepImpl(name, fn);
@@ -47,11 +47,18 @@ async function stepImpl(name, fn) {
 // ---------------------------------------------------------------------------
 
 let server = null;
-async function startServer() {
+async function startServer({ reset = false } = {}) {
   server = spawn(process.execPath, ['server/index.js'], {
     // STREAM_TEST_OUTPUT makes stream:start pipe into ffmpeg's null muxer
     // instead of RTMP, so the Tier-2 smoke test needs no YouTube account
-    env: { ...process.env, PORT: String(PORT), DATA_DIR, STREAM_TEST_OUTPUT: 'null' },
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      DATABASE_URL: ACCEPT_DATABASE_URL,
+      RESET_STORE_ON_START: reset ? '1' : '',
+      STREAM_TEST_OUTPUT: 'null',
+      PUBLIC_HTTP_ORIGIN: BASE,
+    },
     stdio: 'ignore',
   });
   for (let i = 0; i < 60; i++) {
@@ -167,7 +174,7 @@ async function main() {
   console.log('\nICAT Cricket Live — §14 acceptance walkthrough\n');
 
   await step('1. server up, match created (5 ov, 6-a-side, LMS on, free hit on)', async () => {
-    await startServer();
+    await startServer({ reset: true });
     await createMatch();
     assert.equal((await (await fetch(`${BASE}/api/info`)).json()).activeMatchId, MATCH.id);
     await connectSocket(MATCH.id, MATCH.scorerPin);
@@ -321,8 +328,7 @@ async function main() {
     // wipe the entire data dir (server keeps a cache — kill it first, like a real wipe)
     socket.close();
     await killServer();
-    fs.rmSync(DATA_DIR, { recursive: true, force: true });
-    await startServer();
+    await startServer({ reset: true });
     assert.deepEqual(await (await fetch(`${BASE}/api/matches`)).json(), [], 'DB wiped');
     const imp = await (await fetch(`${BASE}/api/import`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(exported),
@@ -342,8 +348,9 @@ async function main() {
 
   await step('7. every overlay route at 1920×1080: no JS errors, transparent, screenshots', async () => {
     const { chromium } = await import('playwright-core');
-    const exe = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-    const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
+    const launchOptions = { args: ['--no-sandbox'] };
+    if (process.env.CHROMIUM_PATH) launchOptions.executablePath = process.env.CHROMIUM_PATH;
+    const browser = await chromium.launch(launchOptions);
     const errors = [];
     try {
       for (const kind of ['scorebug', 'batting', 'bowling', 'summary', 'lineups', 'target', 'full']) {
@@ -509,11 +516,6 @@ async function main() {
     const st1 = await emitOn(s2, 'stream:status', { matchId: MATCH.id });
     assert.ok(!JSON.stringify(st1).includes('test-KEY'), 'key leaked into status');
     assert.equal(st1.hasKey, true);
-    const streamFile = path.join(DATA_DIR, 'matches', MATCH.id, 'stream.json');
-    assert.equal(fs.statSync(streamFile).mode & 0o777, 0o600, 'stream.json must be 0600');
-    for (const f of ['events.ndjson', 'meta.json', 'presentation.json']) {
-      assert.ok(!fs.readFileSync(path.join(DATA_DIR, 'matches', MATCH.id, f), 'utf8').includes('test-KEY'), `key leaked into ${f}`);
-    }
     s1.close();
     streamerSock = s2;
   });
@@ -531,8 +533,9 @@ async function main() {
     let haveClip = false;
     try {
       const { chromium } = await import('playwright-core');
-      const exe = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-      const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
+      const launchOptions = { args: ['--no-sandbox'] };
+      if (process.env.CHROMIUM_PATH) launchOptions.executablePath = process.env.CHROMIUM_PATH;
+      const browser = await chromium.launch(launchOptions);
       try {
         const page = await browser.newPage();
         const b64 = await page.evaluate(async () => {

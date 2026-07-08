@@ -1,11 +1,10 @@
 # ICAT Cricket Live
 
 Ball-by-ball cricket scoring with broadcast-quality overlays for OBS and
-YouTube Live. One small Node server runs on a laptop at the ground; the scorer
-scores from a phone, OBS pulls transparent overlay pages, a director toggles
-graphics, and spectators follow a live scorecard — all over a phone hotspot,
-completely offline if you want. No accounts, no API keys, no database, nothing
-to pay for.
+YouTube Live. A Docker-only local stack runs on a laptop at the ground; the
+scorer scores from a phone, OBS pulls transparent overlay pages, a director
+toggles graphics, and spectators follow a live scorecard over the local
+network.
 
 | Surface | Who uses it | Where |
 |---|---|---|
@@ -22,32 +21,36 @@ hours to activate.
 
 ## Quick start
 
-You need [Node.js](https://nodejs.org) 18 or newer (the current LTS is fine).
+You need Docker Desktop. The app, Node dependencies, Postgres, ffmpeg, Nginx,
+certificates, and optional Python tooling all stay inside Docker.
 
 ```sh
-git clone https://github.com/SaiBalusu-usf/CricketOps.git
 cd CricketOps
-npm install
-npm start
+cp .env.docker.example .env
+# Edit LAN_IP, PUBLIC_HTTP_ORIGIN, and PUBLIC_HTTPS_ORIGIN in .env.
+docker compose up --build
 ```
 
-Then open <http://localhost:3333>. The terminal also prints a LAN URL and a QR
-code for phones on the same Wi-Fi/hotspot.
+Then open <http://localhost:3333>. Phones on the same Wi-Fi/hotspot open
+`http://<laptop-ip>:3333`. For phone camera streaming, install the generated
+local CA from `http://<laptop-ip>:3333/__ca.crt` once, then use
+`https://<laptop-ip>:3443/stream/<matchId>`.
 
 Want to poke around before a real match?
 
 ```sh
-npm run demo    # seeds a half-played T20: match id m-demo, scorer PIN 1234, director PIN 5678
-npm test        # runs the engine's test suite
+docker compose exec app npm run demo
+docker compose exec app npm test
 ```
 
-Run `npm run demo` before starting the server (or restart it afterwards), then
-visit `/console/m-demo`, `/overlay/full`, or `/live/m-demo`.
+Run the demo command after the stack is up, then visit `/console/m-demo`,
+`/overlay/full?match=m-demo`, or `/live/m-demo`.
 
 ## Match day in five steps
 
-1. **Start the server.** Laptop on the hotspot, `npm start`. Note the
-   `Phones (LAN):` URL it prints.
+1. **Start the stack.** Laptop on the hotspot,
+   `docker compose up --build`. Open the configured
+   `PUBLIC_HTTP_ORIGIN`.
 2. **Create the match** from the landing page: team names, players, overs.
    You get two 4-digit PINs — **scorer** and **director** — shown **once** at
    creation. Screenshot them.
@@ -89,14 +92,12 @@ what viewers see).
   phone's camera arrives over Wi-Fi/hotspot WebRTC, replacing DroidCam-style
   third-party apps. OBS still composites `/overlay/full` on top and encodes to
   YouTube as usual.
-- **Without a laptop (Tier 2):** install **ffmpeg** on the machine running the
-  server (`ffmpeg` on PATH or `FFMPEG_PATH=…`), and `/stream` grows a
-  "GO LIVE ON YOUTUBE" button: paste the stream key once (stored on the server
-  with file permissions 0600, never shown or exported again), and the phone
+- **Direct to YouTube (Tier 2):** ffmpeg is bundled in the app container, and
+  `/stream` exposes a "GO LIVE ON YOUTUBE" flow: paste the stream key once
+  (stored privately in Postgres, never shown or exported again), and the phone
   composites the scorebug onto its camera and broadcasts 720p30 straight to
   YouTube through the server. The director panel shows a live health chip
-  (bitrate, uptime, drops). ffmpeg is the **only optional dependency** in the
-  whole app — everything else works without it.
+  (bitrate, uptime, drops).
 
 Both roles use the same takeover model: joining with "take over" cleanly
 revokes the old device, which immediately becomes read-only.
@@ -109,7 +110,7 @@ most recently active match and automatically re-attach when a new match starts.
 Event-sourced, deliberately boring:
 
 ```
-console sends events ─▶ server validates ─▶ append to events.ndjson on disk
+console sends events ─▶ server validates ─▶ append to Postgres event rows
                                         └─▶ state = reduce(events)  (pure function)
                                         └─▶ broadcast snapshot to every client (Socket.IO)
 ```
@@ -122,23 +123,22 @@ browser (`import ... from '/engine/index.js'`).
 | Directory | Contents |
 |---|---|
 | `engine/` | Rules engine: events → state, validation, stinger detection, tests |
-| `server/` | Express + Socket.IO server, disk persistence, PINs, QR |
+| `server/` | Express + Socket.IO server, Postgres persistence, PINs, QR |
 | `client/` | All UI surfaces — vanilla ES modules, no build step |
 | `config/` | `branding.json` |
 | `docs/` | `CONTRACT.md` — the server↔client contract |
 | `scripts/` | `demo.js` (seed data), `acceptance.js` |
-| `data/` | Match storage, created at first run — **back this folder up** |
+| Docker volumes | Postgres data, Node dependencies, generated certs, and tool venv |
 
 ## Resilience
 
 Community matches happen on flaky hotspots. Accordingly:
 
-- **Every event hits the disk immediately** — one JSON line appended to
-  `data/matches/<id>/events.ndjson`. Undo/edit rewrite the log atomically
-  (temp file + rename), so a crash can't corrupt a match.
-- **Restart and resume.** Kill the laptop mid-over, run `npm start`, and the
-  match is exactly where it was. A torn final line from a crash is dropped —
-  that event was never acknowledged to the scorer anyway.
+- **Every event hits Postgres immediately** in an append-only event table.
+  Undo/edit rewrite the event rows transactionally, so a crash cannot leave a
+  half-written match log.
+- **Restart and resume.** Restart the Docker stack and the match is exactly
+  where it was. A failed write is not acknowledged to the scorer.
 - **Scorer offline queue.** If the scorer's phone drops off the network, the
   console keeps accepting balls, queues them in localStorage, and flushes on
   reconnect. Appends are idempotent, so a re-send after a flaky ack never
@@ -152,60 +152,28 @@ Community matches happen on flaky hotspots. Accordingly:
        --data @m-demo.icat-match.json http://localhost:3333/api/import
   ```
 
-## Letting people watch from anywhere (free)
+## Docker Operations
 
-> The full hosting & operations guide — LAN, tunnels, home server, Docker,
-> free cloud VM, plus the zero-downtime playbook (auto-restart, monitoring,
-> backups, safe updates) — is in **[HOSTING.md](HOSTING.md)**.
-
-
-Local is the primary mode: OBS, scorer, and director all talk to the laptop.
-But if family across town wants the `/live` page, or your scorer is at the
-boundary on mobile data, put a free tunnel in front — no account, no key:
-
-1. Install `cloudflared` (Cloudflare's tunnel client):
-   - **Windows:** `winget install Cloudflare.cloudflared`
-   - **macOS:** `brew install cloudflared`
-   - **Linux:** grab the package from the
-     [official downloads page](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
-2. With the server running, open a second terminal:
-
-   ```sh
-   cloudflared tunnel --url http://localhost:3333
-   ```
-
-3. It prints a URL like `https://random-words-here.trycloudflare.com`. Share
-   `https://…trycloudflare.com/live/<matchId>` with spectators; a remote
-   scorer or director can use their pages through it too. **OBS keeps using
-   `localhost`** — the overlay never depends on the internet.
-
-Caveats, honestly: the URL is different every run (share it fresh each match),
-and quick tunnels are rate-limited for heavy traffic — fine for a club match,
-not for a thousand viewers hammering refresh.
-
-Alternative: any free Node host (e.g. Render's free tier) can run the server
-in the cloud, but free-tier disks are **ephemeral** — a redeploy or sleep can
-wipe `data/`. If you go that route, export your matches after every game and
-import them where you need them. Local mode remains the recommended setup.
+The full Docker-only setup and operations guide is in **[DOCKER.md](DOCKER.md)**.
+The legacy hosting guide has been reduced to this local Docker path so the app
+does not spill dependencies into the host OS.
 
 ## Configuration
 
-- **Port:** defaults to `3333`; override with `PORT=8080 npm start`.
+- **Port:** Nginx exposes host ports `3333` for HTTP and `3443` for HTTPS.
 - **Branding** (org name, footer line, logo, accent colour, up to 3 sponsor
-  logos): edit it live at `/settings`, or edit `config/branding.json` directly
-  and refresh your pages. Applies to all overlays and the live page.
-- **Data location:** `DATA_DIR=/path/to/storage npm start` if you don't want
-  match data under the repo's `data/`.
+  logos): edit it live at `/settings`. Applies to all overlays and the live page.
+- **Data location:** match history lives in the `postgres_data` Docker volume.
 
 ## Design decisions
 
-- **No database.** A club's season is a few hundred small files. NDJSON on
-  disk means zero setup, zero native dependencies, backups by copying a
-  folder, and nothing that can fail to start at the ground.
+- **Postgres for persistence.** Matches are stored as durable event rows in the
+  private Postgres container.
 - **Event log + pure reduce, not mutable state.** Scoring mistakes are a fact
   of life; replaying an amended log is the only edit model that's always
   consistent.
-- **Vanilla JS, no build step.** `git clone` → `npm install` → run, forever.
+- **Vanilla JS, no build step.** Docker runs the Node server directly with hot
+  reload in development.
   Volunteers can read and tweak every file, and OBS's embedded Chromium is
   old enough that a small, boring dependency surface is a feature.
 - **Socket.IO rather than raw WebSockets.** Auto-reconnect, per-message ack
