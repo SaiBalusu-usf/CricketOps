@@ -23,6 +23,9 @@ export const DEFAULT_PRESENTATION = {
   theme: 'broadcast',
   ticker: '',
   auto: true,
+  // card carousel at over/innings breaks: batting → bowling → summary (…)
+  // take turns on screen until the next ball is bowled
+  rotate: { enabled: true, seconds: 8 },
   show: {
     scorebug: true,
     batting: false,
@@ -90,6 +93,7 @@ function normalizePresentation(p) {
     ...DEFAULT_PRESENTATION,
     ...(p || {}),
     show: { ...DEFAULT_PRESENTATION.show, ...((p && p.show) || {}) },
+    rotate: { ...DEFAULT_PRESENTATION.rotate, ...((p && p.rotate) || {}) },
   };
 }
 

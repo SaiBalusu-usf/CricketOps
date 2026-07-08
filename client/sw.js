@@ -3,7 +3,7 @@
    fallback, for same-origin GETs that are not API or socket traffic. */
 // BUMP this version string whenever any client file changes, or phones keep
 // running the old console from cache after an update.
-const CACHE = 'icat-cricket-v3';
+const CACHE = 'icat-cricket-v5';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

@@ -325,6 +325,37 @@ const RENDERERS = {
 // Page boot
 // ---------------------------------------------------------------------------
 
+const ROTATABLE = ['batting', 'bowling', 'summary', 'lineups', 'target'];
+
+/**
+ * Card carousel (auto-rotation). During natural pauses the info cards take
+ * turns on screen, cycling every `rotate.seconds` until play resumes:
+ *   over break    -> batting -> bowling -> summary (target instead, in a chase)
+ *   innings break -> summary -> batting -> bowling -> target/lineups
+ *   pre-match     -> lineups
+ * Every card page computes the same schedule from the shared wall clock, so
+ * separate OBS browser sources stay in lockstep with no extra coordination.
+ * A manually switched-on card pauses the carousel (the director wins), and
+ * the moment the next ball is bowled every rotated card hides itself.
+ */
+function rotationTurn(state, pres) {
+  const rot = pres && pres.rotate;
+  if (!rot || !rot.enabled || !pres.auto || !state || !state.config) return null;
+  if (ROTATABLE.some((k) => pres.show && pres.show[k])) return null; // manual override
+  const inn = state.innings.length ? state.innings[state.innings.length - 1] : null;
+
+  let list = null;
+  if (state.phase === 'setup') list = ['lineups'];
+  else if (state.phase === 'break') list = ['summary', 'batting', 'bowling', state.target ? 'target' : 'lineups'];
+  else if (state.phase === 'live' && inn && inn.legalBalls > 0 && inn.thisOver.length === 0) {
+    // between overs: from the 6th legal ball until the first ball of the next over
+    list = state.chase ? ['batting', 'bowling', 'target'] : ['batting', 'bowling', 'summary'];
+  }
+  if (!list) return null;
+  const ms = Math.max(4, rot.seconds || 8) * 1000;
+  return list[Math.floor(Date.now() / ms) % list.length];
+}
+
 export async function bootCard(name) {
   fitStage();
   const render = RENDERERS[name];
@@ -339,11 +370,15 @@ export async function bootCard(name) {
       has = !!render(ui, state);
     }
     let show = !!(pres && pres.show && pres.show[name]);
-    // sensible-auto: the summary surfaces itself at innings break / full time
-    if (name === 'summary' && pres && pres.auto && state
-        && (state.phase === 'break' || state.phase === 'complete')) show = true;
+    // sensible-auto: the summary surfaces itself at full time
+    if (name === 'summary' && pres && pres.auto && state && state.phase === 'complete') show = true;
+    // carousel turn (over/innings breaks, pre-match)
+    if (!show && rotationTurn(state, pres) === name) show = true;
     ui.wrap.classList.toggle('hidden', !(has && show));
   }
+
+  // the carousel advances on the wall clock, not on state changes
+  setInterval(() => { if (pres && pres.rotate && pres.rotate.enabled) update(); }, 300);
 
   return connect({
     matchId: new URLSearchParams(location.search).get('match'),

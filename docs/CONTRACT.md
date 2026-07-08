@@ -218,6 +218,13 @@ presentation = {
   "ticker": "",                       // free text; empty = hidden
   "videoUrl": "",                     // YouTube link, set from the director panel;
                                       // the public /live page embeds it in its video card
+  "rotate": { "enabled": true, "seconds": 8 },  // card carousel: at over/innings
+                                      // breaks the card overlays take turns on screen
+                                      // (batting → bowling → summary/target; lineups
+                                      // pre-match), computed from the wall clock so
+                                      // separate OBS sources stay in lockstep; any
+                                      // manually-on card pauses it, and the next
+                                      // delivery clears it
   "auto": true,                       // auto stingers / auto cards
   "show": { "scorebug": true, "batting": false, "bowling": false,
             "summary": false, "lineups": false, "target": false }

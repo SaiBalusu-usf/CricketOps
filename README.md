@@ -51,7 +51,10 @@ Run the demo command after the stack is up, then visit `/console/m-demo`,
 1. **Start the stack.** Laptop on the hotspot,
    `docker compose up --build`. Open the configured
    `PUBLIC_HTTP_ORIGIN`.
-2. **Create the match** from the landing page: team names, players, overs.
+2. **Create the match** from the landing page: team names, players, overs —
+   or tap **Import roster (Excel / CSV)** in the wizard and load the sheet the
+   teams shared (team names in the first row with players below, or
+   Team,Player columns; with more than two teams you pick the two playing).
    You get two 4-digit PINs — **scorer** and **director** — shown **once** at
    creation. Screenshot them.
 3. **Scorer joins.** The scorer's phone scans the QR from the landing page (or
@@ -104,6 +107,14 @@ revokes the old device, which immediately becomes read-only.
 
 Overlay pages accept `?match=<id>`; without it they attach to the server's
 most recently active match and automatically re-attach when a new match starts.
+
+**Card carousel.** Add all the card overlays as stacked OBS sources and leave
+them off: at every over break the cards automatically take turns on screen
+(batting → bowling → summary, or the chase panel during a run chase; the full
+carousel also runs through the innings break, and lineups show before play).
+The moment the next ball is bowled they all clear. The director panel has the
+on/off tile and the seconds-per-card setting; manually switching a card on
+always wins over the carousel.
 
 ## Architecture
 

@@ -4,7 +4,8 @@
  */
 
 import { $, h } from '/client/shared/app.js';
-import { themeToggle, toast, copyText, segmented, field, toggleRow } from '/client/console/ui.js';
+import { themeToggle, toast, copyText, segmented, field, toggleRow, openSheet, closeSheet } from '/client/console/ui.js';
+import { parseRosterFile } from '/client/console/roster-import.js';
 
 const getJson = (url) => fetch(url).then((r) => r.json());
 
@@ -115,9 +116,67 @@ export function renderWizard() {
     h('button', { class: 'btn', onclick: backFn }, 'Back'),
     h('button', { class: 'btn primary', onclick: nextFn }, nextLabel));
 
+  // Roster import: teams share a spreadsheet → fill both squads in one tap.
+  const applyImportedTeams = (teams) => {
+    teams.slice(0, 2).forEach((imp, i) => {
+      const t = cfg.teams[i];
+      t.name = imp.name;
+      if (!t.shortTouched) t.short = autoShort(imp.name);
+      t.playersText = imp.players.join('\n');
+    });
+    draw();
+    toast(`Imported ${teams.slice(0, 2).map((t) => `${t.name} (${t.players.length})`).join(' and ')}`);
+  };
+
+  const pickTwoTeams = (teams) => {
+    const chosen = new Set();
+    const s = openSheet('rosterPick', { title: `${teams.length} teams found — pick two` });
+    const drawPick = () => {
+      s.body.textContent = '';
+      s.body.append(h('p', { class: 'sheet-note' }, 'Tap the two teams playing this match.'));
+      for (const t of teams) {
+        s.body.append(h('button', {
+          class: `btn pick${chosen.has(t) ? ' on' : ''}`,
+          style: { width: '100%', marginBottom: '8px', justifyContent: 'space-between', display: 'flex' },
+          onclick: () => {
+            if (chosen.has(t)) chosen.delete(t);
+            else if (chosen.size < 2) chosen.add(t);
+            drawPick();
+          },
+        }, h('span', {}, t.name), h('span', { class: 'muted small' }, `${t.players.length} players`)));
+      }
+      s.body.append(h('button', {
+        class: 'btn primary', style: { width: '100%' }, disabled: chosen.size !== 2,
+        onclick: () => { closeSheet(); applyImportedTeams([...chosen]); },
+      }, 'Use these two teams'));
+    };
+    drawPick();
+  };
+
+  const importRoster = async (file) => {
+    if (!file) return;
+    try {
+      const teams = await parseRosterFile(file);
+      if (teams.length > 2) pickTwoTeams(teams);
+      else applyImportedTeams(teams);
+    } catch (err) {
+      toast(err.message || 'Could not read that file', 'danger');
+    }
+  };
+
   // Step 1 — teams, squads, colors
   const stepTeams = (page) => {
     page.append(h('div', { class: 'wiz-title' }, 'Teams & squads'));
+    const fileIn = h('input', {
+      type: 'file', accept: '.xlsx,.csv,.tsv,.txt,text/csv', style: { display: 'none' },
+      onchange: (e) => { importRoster(e.target.files[0]); e.target.value = ''; },
+    });
+    page.append(h('div', { class: 'card', style: { marginBottom: '10px' } },
+      h('div', { class: 'row' },
+        h('button', { class: 'btn accent grow', onclick: () => fileIn.click() }, 'Import roster (Excel / CSV)'),
+        fileIn),
+      h('p', { class: 'small muted', style: { margin: '8px 2px 0' } },
+        'Layouts: team names in the first row with players below each name, or two columns of Team, Player. More than two teams? You pick which two play.')));
     cfg.teams.forEach((t, i) => {
       const nameIn = h('input', { type: 'text', class: 'grow', placeholder: i === 0 ? 'e.g. ICAT Blue' : 'e.g. ICAT Gold', value: t.name, autocapitalize: 'words' });
       const shortIn = h('input', { type: 'text', class: 'short-input', maxlength: '4', placeholder: i === 0 ? 'BLU' : 'GLD', value: t.short });

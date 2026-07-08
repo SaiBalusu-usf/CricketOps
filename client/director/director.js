@@ -427,7 +427,35 @@ async function startDirector(matchId) {
       refs.themeBtns[v] = b;
       seg.append(b);
     }
-    colA.append(section('Presentation', refs.autoTile, fieldEl('Overlay theme', seg)));
+    // card carousel: cards take turns on screen during over/innings breaks
+    refs.rotateTile = h('button', {
+      class: 'tile wide', type: 'button',
+      onclick: async () => {
+        const on = !(pres && pres.rotate && pres.rotate.enabled);
+        if (pres && pres.rotate) pres.rotate.enabled = on;
+        updatePresentation();
+        const r = await app.setPresentation({ rotate: { enabled: on } });
+        if (!r.ok) toast('Could not save', 'warn');
+      },
+    },
+      h('span', { class: 't-name' }, 'Rotate cards at breaks'),
+      h('span', { class: 't-state' }, 'OFF'));
+    refs.rotateSecs = {};
+    const rseg = h('div', { class: 'seg' });
+    for (const s of [6, 8, 10, 12]) {
+      const b = h('button', {
+        class: 'seg-btn', type: 'button',
+        onclick: async () => {
+          if (pres && pres.rotate) pres.rotate.seconds = s;
+          updatePresentation();
+          await app.setPresentation({ rotate: { seconds: s } });
+        },
+      }, `${s}s`);
+      refs.rotateSecs[s] = b;
+      rseg.append(b);
+    }
+    colA.append(section('Presentation', refs.autoTile, refs.rotateTile,
+      fieldEl('Seconds per card', rseg), fieldEl('Overlay theme', seg)));
 
     // ticker
     refs.ticker = h('input', { type: 'text', placeholder: 'Ticker text — empty hides it', autocomplete: 'off' });
@@ -590,6 +618,10 @@ async function startDirector(matchId) {
     }
     refs.autoTile.classList.toggle('on', !!pres.auto);
     refs.autoTile.querySelector('.t-state').textContent = pres.auto ? 'ON' : 'OFF';
+    const rot = pres.rotate || { enabled: false, seconds: 8 };
+    refs.rotateTile.classList.toggle('on', !!rot.enabled);
+    refs.rotateTile.querySelector('.t-state').textContent = rot.enabled ? 'ON' : 'OFF';
+    for (const [s, b] of Object.entries(refs.rotateSecs)) b.classList.toggle('on', +s === (rot.seconds || 8));
     const theme = pres.theme === 'chroma' ? 'chroma' : 'broadcast';
     for (const [v, btn] of Object.entries(refs.themeBtns)) btn.classList.toggle('on', theme === v);
     if (document.activeElement !== refs.ticker) refs.ticker.value = pres.ticker || '';
