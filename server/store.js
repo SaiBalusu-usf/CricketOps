@@ -7,6 +7,7 @@
  */
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
+import { assertAcceptanceResetEnvironment } from '../scripts/acceptance-safety.js';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://icat:icat_local@postgres:5432/icat_cricket';
 const pool = new Pool({ connectionString: DATABASE_URL });
@@ -105,6 +106,9 @@ function normalizeBranding(branding) {
 }
 
 export async function ensureDirs() {
+  if (process.env.RESET_STORE_ON_START === '1') {
+    assertAcceptanceResetEnvironment(process.env);
+  }
   const attempts = Number(process.env.DB_CONNECT_ATTEMPTS || 60);
   let lastErr = null;
   for (let i = 0; i < attempts; i += 1) {
