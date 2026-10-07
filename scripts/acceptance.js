@@ -22,20 +22,26 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { io } from 'socket.io-client';
 import { reduce } from '../engine/index.js';
+import { assertAcceptanceDatabase } from './acceptance-safety.js';
 
 const PORT = process.env.ACCEPT_PORT || 3411;
 const BASE = `http://localhost:${PORT}`;
 const WORK = process.env.ACCEPT_DIR || path.join('/tmp', 'cricketops-acceptance');
 const SHOTS = path.join(WORK, 'shots');
-const ACCEPT_DATABASE_URL = process.env.ACCEPT_DATABASE_URL || process.env.DATABASE_URL;
+const ACCEPT_DATABASE_URL = assertAcceptanceDatabase(process.env);
 
 const results = [];
 const step = (name, fn) => stepImpl(name, fn);
 async function stepImpl(name, fn) {
   try {
-    await fn();
-    results.push({ name, ok: true });
-    console.log(`  ✔ ${name}`);
+    const outcome = await fn();
+    if (outcome?.skipped) {
+      results.push({ name, skipped: outcome.skipped });
+      console.log(`  - SKIP ${name}: ${outcome.skipped}`);
+    } else {
+      results.push({ name, ok: true });
+      console.log(`  ✔ ${name}`);
+    }
   } catch (err) {
     results.push({ name, ok: false, err });
     console.log(`  ✘ ${name}\n    ${err.message}`);
@@ -56,6 +62,8 @@ async function startServer({ reset = false } = {}) {
       PORT: String(PORT),
       DATABASE_URL: ACCEPT_DATABASE_URL,
       RESET_STORE_ON_START: reset ? '1' : '',
+      ACCEPTANCE_RESET_ALLOWED: reset ? '1' : '',
+      ACCEPT_PRODUCTION_DATABASE_URL: process.env.DATABASE_URL || '',
       STREAM_TEST_OUTPUT: 'null',
       PUBLIC_HTTP_ORIGIN: BASE,
     },
@@ -523,8 +531,7 @@ async function main() {
   await step('12. Tier-2 ffmpeg pipe smoke test (skips cleanly without ffmpeg)', async () => {
     const info = await (await fetch(`${BASE}/api/info`)).json();
     if (!info.streaming || !info.streaming.rtmp) {
-      console.log('    skipped: no ffmpeg on this host');
-      return;
+      return { skipped: 'no ffmpeg on this host' };
     }
     const ff = process.env.FFMPEG_PATH || 'ffmpeg';
     const sample = path.join(WORK, 'sample.webm');
@@ -579,8 +586,7 @@ async function main() {
       haveClip = g.status === 0 && fs.existsSync(sample);
     }
     if (!haveClip) {
-      console.log('    skipped: could not generate a test clip on this host');
-      return;
+      return { skipped: 'could not generate a test clip on this host' };
     }
     const s2 = streamerSock;
     assert.ok(s2, 'streamer socket from step 11');
@@ -605,8 +611,9 @@ async function main() {
   socket?.close();
   await killServer();
 
-  const fails = results.filter((r) => !r.ok);
-  console.log(`\n${results.length - fails.length}/${results.length} steps passed. Screenshots: ${SHOTS}\n`);
+  const fails = results.filter((r) => !r.ok && !r.skipped);
+  const skipped = results.filter((r) => r.skipped);
+  console.log(`\n${results.length - fails.length - skipped.length}/${results.length} steps passed, ${skipped.length} skipped. Screenshots: ${SHOTS}\n`);
   if (fails.length) {
     for (const f of fails) console.log(`FAILED: ${f.name}\n${f.err.stack}\n`);
     process.exit(1);
